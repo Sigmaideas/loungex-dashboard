@@ -280,9 +280,10 @@ input, select {
 .kpi-value.neg { color: var(--danger); }
 
 /* ───────── 차트 ───────── */
+/* 높이는 지점 수에 맞춰 script.js 에서 인라인으로 지정(가로 막대) */
 .chart-card .chart-wrap {
   position: relative;
-  height: clamp(260px, 32vw, 380px);
+  height: 260px;
 }
 
 /* ───────── 반응형 미세 조정 ───────── */
@@ -442,6 +443,15 @@ input, select {
 
 .cell-readonly {
   color: var(--text-muted);
+}
+
+/* 임대료 비율 방식 표시(예: "매출 10%") */
+.cell-note {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.2;
+  margin-top: 1px;
 }
 
 .pnl-stack {

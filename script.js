@@ -152,6 +152,30 @@ const parseNumberInput = (str) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/* ── 월 임대료: 고정 금액 또는 "매출 %" 두 가지 방식 ──
+ * store.monthlyRentRate 가 있으면(예: 0.1) 임대료 = 월평균 매출(VAT 별도) × 비율,
+ * 없으면 store.monthlyRent(고정 금액)를 사용한다. */
+const getRentRate = (store) => {
+  const r = Number(store?.monthlyRentRate);
+  return Number.isFinite(r) && r > 0 ? r : null;
+};
+
+// netRevenue: VAT 별도 월평균 매출 (= 월평균매출 × 0.9)
+const resolveMonthlyRent = (store, netRevenue) => {
+  const rate = getRentRate(store);
+  return rate != null ? netRevenue * rate : (store.monthlyRent || 0);
+};
+
+// "10%" → 0.1 형태의 비율 입력인지 판별
+const parseRentInput = (str) => {
+  const s = String(str ?? "").trim();
+  if (s.includes("%")) {
+    const pct = parseNumberInput(s);
+    return pct > 0 ? { monthlyRentRate: pct / 100 } : { monthlyRentRate: null, monthlyRent: 0 };
+  }
+  return { monthlyRentRate: null, monthlyRent: parseNumberInput(s) };
+};
+
 /* ============================================================
  *  저장 / 복원
  * ============================================================ */
@@ -227,7 +251,7 @@ async function cloudSave({ silent = false } = {}) {
 
 // 사용자가 직접 입력하는 지점 필드(참고용)
 const MANUAL_STORE_FIELDS = [
-  "totalInvestment", "monthlyRent", "monthlyLabor",
+  "totalInvestment", "monthlyRent", "monthlyRentRate", "monthlyLabor",
   "openingProfit", "openDate", "operatingProfitRate", "type", "name", "payoutRate",
 ];
 
@@ -316,12 +340,15 @@ function getStoreMetrics(store, startYM, endYM) {
 
   const roi = minMonthlyPayout > 0 ? avgMonthlyPayout / minMonthlyPayout : 0;
 
+  // 월 임대료: 고정 금액 또는 월평균 매출(VAT 별도) 대비 비율
+  const monthlyRent = resolveMonthlyRent(store, avgMonthlyRevenue * 0.9);
+
   // 회사 월 P&L = 월평균매출(VAT별도) - 월평균회수금액 - 월평균매출(VAT별도)×0.3(식자재)
   //             - 월 임대료 - 인건비(고정 300만)
   const operatingProfit = avgMonthlyRevenue * 0.9
     - avgMonthlyPayout
     - avgMonthlyRevenue * 0.9 * materialRate
-    - (store.monthlyRent || 0)
+    - monthlyRent
     - DEFAULT_MONTHLY_LABOR;
 
   const openingProfitInRange = 0; // 회사 P&L 에서 오픈수익 제외
@@ -337,10 +364,11 @@ function getStoreMetrics(store, startYM, endYM) {
   const roiFiltered = minMonthlyPayout > 0
     ? avgMonthlyPayoutFiltered / minMonthlyPayout
     : 0;
+  const monthlyRentFiltered = resolveMonthlyRent(store, avgMonthlyRevenueFiltered * 0.9);
   const operatingProfitFiltered = avgMonthlyRevenueFiltered * 0.9
     - avgMonthlyPayoutFiltered
     - avgMonthlyRevenueFiltered * 0.9 * materialRate
-    - (store.monthlyRent || 0)
+    - monthlyRentFiltered
     - DEFAULT_MONTHLY_LABOR;
   const companyPnlFiltered = operatingProfitFiltered;
 
@@ -360,6 +388,8 @@ function getStoreMetrics(store, startYM, endYM) {
     totalPayoutCalculated,
     recoveryRate,
     materialCost,
+    monthlyRent,
+    monthlyRentFiltered,
     roiFiltered,
     companyPnlFiltered,
   };
@@ -510,6 +540,36 @@ function renderKPI(startYM, endYM) {
 /* ============================================================
  *  매장별 매출 비중 차트 (도넛)
  * ============================================================ */
+// 가로 막대 끝에 매출 비중(%)을 직접 그려주는 플러그인
+const barShareLabels = {
+  id: "barShareLabels",
+  afterDatasetsDraw(chart) {
+    const meta = chart.getDatasetMeta(0);
+    if (!meta || meta.hidden) return;
+    const ctx = chart.ctx;
+    const values = chart.data.datasets[0].data || [];
+    ctx.save();
+    ctx.font = "600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.textBaseline = "middle";
+    meta.data.forEach((bar, i) => {
+      const pct = Number(values[i]) || 0;
+      const text = `${pct.toFixed(1)}%`;
+      const right = chart.chartArea.right;
+      // 오른쪽 여백이 부족하면 막대 안쪽에 흰 글씨로
+      if (bar.x + 8 + ctx.measureText(text).width > right + 44) {
+        ctx.textAlign = "right";
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(text, bar.x - 8, bar.y);
+      } else {
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#495057";
+        ctx.fillText(text, bar.x + 8, bar.y);
+      }
+    });
+    ctx.restore();
+  },
+};
+
 function renderChart(startYM, endYM) {
   const wrap = document.querySelector(".chart-card .chart-wrap");
   if (!wrap) return;
@@ -536,6 +596,7 @@ function renderChart(startYM, endYM) {
       revenueChart.destroy();
       revenueChart = null;
     }
+    wrap.style.height = "";
     wrap.innerHTML = '<div class="empty-state">선택 기간에 매출 데이터가 없습니다.</div>';
     return;
   }
@@ -553,47 +614,47 @@ function renderChart(startYM, endYM) {
   ];
   const colors = labels.map((_, i) => palette[i % palette.length]);
   const total = values.reduce((s, v) => s + v, 0);
+  // 막대 길이 = 매출 비중(%)
+  const shares = values.map((v) => (total > 0 ? (v / total) * 100 : 0));
+
+  // 지점 수에 맞춰 차트 높이 조정(막대가 너무 두꺼워지거나 겹치지 않도록)
+  wrap.style.height = `${Math.max(180, labels.length * 38 + 56)}px`;
 
   const data = {
     labels,
     datasets: [{
-      data: values,
+      data: shares,
       backgroundColor: colors,
-      borderColor: "#ffffff",
-      borderWidth: 2,
+      borderRadius: 4,
+      borderSkipped: false,
+      barThickness: 22,
+      maxBarThickness: 26,
+      revenue: values, // 툴팁에서 금액 표시용
     }],
   };
 
-  const narrow = window.matchMedia("(max-width: 760px)").matches;
+  const maxShare = Math.max(...shares, 0);
   const options = {
+    indexAxis: "y", // 좌우로 긴 가로 막대
     responsive: true,
     maintainAspectRatio: false,
-    cutout: "60%",
-    plugins: {
-      legend: {
-        position: narrow ? "bottom" : "right",
-        labels: {
-          color: "#495057",
-          font: { size: 12, family: "inherit" },
-          padding: 12,
-          generateLabels: (chart) => {
-            const ds = chart.data.datasets[0];
-            const t = (ds.data || []).reduce((s, v) => s + (v || 0), 0);
-            return chart.data.labels.map((label, i) => {
-              const v = ds.data[i] || 0;
-              const pct = t > 0 ? ((v / t) * 100).toFixed(1) : "0.0";
-              return {
-                text: `${label}  ${pct}%`,
-                fillStyle: ds.backgroundColor[i],
-                strokeStyle: ds.backgroundColor[i],
-                lineWidth: 0,
-                fontColor: "#495057",
-                index: i,
-              };
-            });
-          },
-        },
+    layout: { padding: { right: 52 } }, // 막대 끝 % 라벨 공간
+    scales: {
+      x: {
+        beginAtZero: true,
+        max: Math.min(100, Math.ceil(maxShare * 1.1)) || 100,
+        grid: { color: "#eceef2" },
+        border: { display: false },
+        ticks: { color: "#868e96", font: { size: 11 }, callback: (v) => `${v}%` },
       },
+      y: {
+        grid: { display: false },
+        border: { display: false },
+        ticks: { color: "#495057", font: { size: 12 } },
+      },
+    },
+    plugins: {
+      legend: { display: false }, // 지점명은 y축에 표시되므로 범례 불필요
       tooltip: {
         backgroundColor: "#343a46",
         titleColor: "#ffffff",
@@ -603,9 +664,9 @@ function renderChart(startYM, endYM) {
         padding: 10,
         callbacks: {
           label: (c) => {
-            const v = c.parsed || 0;
-            const pct = total > 0 ? ((v / total) * 100).toFixed(1) : "0.0";
-            return `${c.label}: ${formatCurrency(v)} (${pct}%)`;
+            const pct = c.parsed.x || 0;
+            const amount = c.dataset.revenue?.[c.dataIndex] || 0;
+            return `${pct.toFixed(1)}% · ${formatCurrency(amount)}`;
           },
         },
       },
@@ -618,7 +679,7 @@ function renderChart(startYM, endYM) {
     revenueChart.update();
   } else {
     if (revenueChart) revenueChart.destroy();
-    revenueChart = new Chart(ctx, { type: "doughnut", data, options });
+    revenueChart = new Chart(ctx, { type: "bar", data, options, plugins: [barShareLabels] });
   }
 }
 
@@ -642,7 +703,7 @@ function getSortedStoreRows(startYM, endYM) {
       case "totalPayout": av = a.totalPayoutCalculated; bv = b.totalPayoutCalculated; break;
       case "recoveryRate": av = a.recoveryRate; bv = b.recoveryRate; break;
       case "avgRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
-      case "monthlyRent": av = a.store.monthlyRent || 0; bv = b.store.monthlyRent || 0; break;
+      case "monthlyRent": av = a.monthlyRent; bv = b.monthlyRent; break;
       case "monthlyLabor": av = a.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; bv = b.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; break;
       case "materialCost": av = a.materialCost; bv = b.materialCost; break;
       case "minPayout": av = a.minMonthlyPayout; bv = b.minMonthlyPayout; break;
@@ -672,7 +733,7 @@ const STORE_COLUMNS = [
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "월평균 회수금액", sort: "avgPayout", center: true },
   { label: "수익률", sort: "roi" },
-  { label: "월 임대료", sort: "monthlyRent", center: true },
+  { label: "월 임대료", sort: "monthlyRent", center: true, title: "더블클릭 후 금액(3000000) 또는 매출 비율(10%)을 입력하세요" },
   { label: "회사 P&L", sort: "companyPnl" },
   { label: "", action: true },
 ];
@@ -683,8 +744,17 @@ function renderStoreHead() {
   thead.innerHTML = "<tr>" + STORE_COLUMNS.map((c) => {
     const cls = [c.center ? "center" : "", c.action ? "col-action" : ""].filter(Boolean).join(" ");
     const sortAttr = c.sort ? ` data-sort="${c.sort}"` : "";
-    return `<th${sortAttr}${cls ? ` class="${cls}"` : ""}>${escapeHtml(c.label)}</th>`;
+    const titleAttr = c.title ? ` title="${escapeHtml(c.title)}"` : "";
+    return `<th${sortAttr}${titleAttr}${cls ? ` class="${cls}"` : ""}>${escapeHtml(c.label)}</th>`;
   }).join("") + "</tr>";
+}
+
+// 임대료 셀: 비율 방식이면 계산된 금액 아래에 "매출 10%" 표시
+function renderRentCell(store, rentAmount) {
+  const rate = getRentRate(store);
+  if (rate == null) return formatCurrency(store.monthlyRent || 0);
+  const pct = Number((rate * 100).toFixed(2));
+  return `${formatCurrency(rentAmount)}<span class="cell-note">매출 ${pct}%</span>`;
 }
 
 function renderStoreTable(startYM, endYM) {
@@ -713,7 +783,7 @@ function renderStoreTable(startYM, endYM) {
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly ${m.avgMonthlyPayout >= m.minMonthlyPayout && m.minMonthlyPayout > 0 ? "pos" : ""}">${formatCurrency(m.avgMonthlyPayout)}</td>
       <td class="num cell-readonly ${formatRoiDisplay(m.roi, m.minMonthlyPayout).cls}">${formatRoiDisplay(m.roi, m.minMonthlyPayout).text}</td>
-      <td class="num center"><span class="cell-editable" data-edit="store" data-field="monthlyRent" data-id="${store.id}" data-input-type="number">${formatCurrency(store.monthlyRent || 0)}</span></td>
+      <td class="num center"><span class="cell-editable" data-edit="store" data-field="monthlyRent" data-id="${store.id}" data-input-type="rent" title="금액(예: 3000000) 또는 매출 비율(예: 10%)을 입력하세요">${renderRentCell(store, m.monthlyRent)}</span></td>
       <td>
         <div class="pnl-stack">
           <div class="pnl-line ${m.operatingProfit < 0 ? "neg" : "accent"}">
@@ -731,7 +801,7 @@ function renderStoreTable(startYM, endYM) {
   const sum = rows.reduce((acc, r) => {
     acc.investment += r.store.totalInvestment || 0;
     acc.totalPayout += r.totalPayoutCalculated;
-    acc.monthlyRent += r.store.monthlyRent || 0;
+    acc.monthlyRent += r.monthlyRent;
     acc.monthlyLabor += r.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR;
     acc.materialCost += r.materialCost;
     acc.revenueAll += r.totalRevenueAll;
@@ -929,6 +999,17 @@ function startEditing(cell) {
     htmlInput.type = "number";
     htmlInput.step = "any";
     htmlInput.value = Number(originalValue) || 0;
+  } else if (inputType === "rent") {
+    // 금액(3000000) 또는 매출 비율(10%) 모두 허용 → 텍스트 입력
+    const store = state.stores.find((s) => s.id === cell.dataset.id);
+    const rate = getRentRate(store);
+    htmlInput = document.createElement("input");
+    htmlInput.type = "text";
+    htmlInput.inputMode = "decimal";
+    htmlInput.placeholder = "3000000 또는 10%";
+    htmlInput.value = rate != null
+      ? `${Number((rate * 100).toFixed(2))}%`
+      : String(Number(store?.monthlyRent) || 0);
   } else if (inputType === "rate") {
     htmlInput = document.createElement("input");
     htmlInput.type = "number";
@@ -963,6 +1044,7 @@ function startEditing(cell) {
     let newValue = htmlInput.value;
     if (inputType === "number") newValue = parseNumberInput(newValue);
     else if (inputType === "rate") newValue = parseNumberInput(newValue) / 100;
+    else if (inputType === "rent") newValue = parseRentInput(newValue); // { monthlyRent?, monthlyRentRate }
 
     applyEdit(editKind, cell, field, newValue);
   };
@@ -983,7 +1065,9 @@ function applyEdit(editKind, cell, field, newValue) {
   if (editKind === "store") {
     const store = state.stores.find((s) => s.id === cell.dataset.id);
     if (!store) return;
-    store[field] = newValue;
+    // 임대료처럼 한 번에 여러 필드를 바꾸는 편집(금액/비율 전환)
+    if (newValue && typeof newValue === "object") Object.assign(store, newValue);
+    else store[field] = newValue;
   } else if (editKind === "monthly") {
     const m = state.monthly.find(
       (x) => x.storeId === cell.dataset.storeId && x.yearMonth === cell.dataset.key
