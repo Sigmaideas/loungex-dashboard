@@ -951,17 +951,16 @@ function renderTrendChart(startYM, endYM) {
     labels: months,
     datasets: [
       {
-        type: "bar",
         label: "매출",
         data: revenues,
+        borderColor: "#296ff7",
         backgroundColor: "#296ff7",
-        borderRadius: 4,
-        borderSkipped: false,
-        maxBarThickness: 44,
-        order: 2,
+        borderWidth: 2.5,
+        pointRadius: 3.5,
+        pointHoverRadius: 5,
+        tension: 0.25,
       },
       {
-        type: "line",
         label: "순익 (회사 P&L)",
         data: pnls,
         borderColor: "#23a375",
@@ -970,7 +969,6 @@ function renderTrendChart(startYM, endYM) {
         pointRadius: 3.5,
         pointHoverRadius: 5,
         tension: 0.25,
-        order: 1,
       },
     ],
   };
@@ -1024,7 +1022,7 @@ function renderTrendChart(startYM, endYM) {
     trendChart.update();
   } else {
     if (trendChart) trendChart.destroy();
-    trendChart = new Chart(ctx, { type: "bar", data, options });
+    trendChart = new Chart(ctx, { type: "line", data, options });
   }
 }
 
