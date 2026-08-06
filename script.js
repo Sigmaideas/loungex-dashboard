@@ -604,6 +604,143 @@ const CHART_PALETTE = [
   "#06b6d4", "#84cc16",
 ];
 
+// 100% 누적 막대의 각 구간 안에 비중(%)을 그려주는 플러그인
+const stackedShareLabels = {
+  id: "stackedShareLabels",
+  afterDatasetsDraw(chart) {
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    chart.data.datasets.forEach((ds, di) => {
+      const meta = chart.getDatasetMeta(di);
+      if (meta.hidden) return;
+      const bar = meta.data[0];
+      if (!bar) return;
+      const width = Math.abs(bar.x - bar.base);
+      const pct = Number(ds.data[0]) || 0;
+      const cx = (bar.x + bar.base) / 2;
+      // 구간이 좁으면 % 만, 아주 좁으면 생략(범례에 지점명+% 가 모두 표시됨)
+      if (width < 34) return;
+      ctx.fillStyle = "#ffffff";
+      if (width >= 78) {
+        ctx.font = "600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        ctx.fillText(ds.label, cx, bar.y - 9);
+        ctx.font = "700 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        ctx.fillText(`${pct.toFixed(1)}%`, cx, bar.y + 9);
+      } else {
+        ctx.font = "700 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        ctx.fillText(`${pct.toFixed(1)}%`, cx, bar.y);
+      }
+    });
+    ctx.restore();
+  },
+};
+
+/**
+ * 전체를 100%로 보는 단일 누적 가로 막대.
+ * items: [{ name, value }] — 비중 큰 순으로 정렬된 배열. 지점마다 하나의 구간이 된다.
+ */
+function renderStackedShareBar({ wrapId, canvasId, chart, items, emptyText }) {
+  const wrap = document.getElementById(wrapId);
+  if (!wrap) return chart;
+
+  if (items.length === 0) {
+    if (chart) chart.destroy();
+    wrap.style.height = "";
+    wrap.innerHTML = `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
+    return null;
+  }
+
+  if (!document.getElementById(canvasId)) {
+    wrap.innerHTML = `<canvas id="${canvasId}"></canvas>`;
+  }
+  const ctx = document.getElementById(canvasId);
+
+  const total = items.reduce((s, x) => s + x.value, 0);
+  // 막대 + x축 + 범례(지점 4개당 한 줄) 높이
+  wrap.style.height = `${112 + Math.ceil(items.length / 4) * 26}px`;
+
+  const data = {
+    labels: [""],
+    datasets: items.map((x, i) => ({
+      label: x.name,
+      data: [total > 0 ? (x.value / total) * 100 : 0],
+      amount: x.value,
+      backgroundColor: CHART_PALETTE[i % CHART_PALETTE.length],
+      borderRadius: {
+        topLeft: i === 0 ? 6 : 0,
+        bottomLeft: i === 0 ? 6 : 0,
+        topRight: i === items.length - 1 ? 6 : 0,
+        bottomRight: i === items.length - 1 ? 6 : 0,
+      },
+      borderSkipped: false,
+      barThickness: 46,
+    })),
+  };
+
+  const options = {
+    indexAxis: "y", // 좌우로 긴 가로 막대
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: {
+        stacked: true,
+        min: 0,
+        max: 100,
+        grid: { color: "#eceef2" },
+        border: { display: false },
+        ticks: { color: "#868e96", font: { size: 11 }, stepSize: 25, callback: (v) => `${v}%` },
+      },
+      y: { stacked: true, grid: { display: false }, border: { display: false }, ticks: { display: false } },
+    },
+    plugins: {
+      legend: {
+        position: "bottom",
+        labels: {
+          color: "#495057",
+          font: { size: 12 },
+          boxWidth: 10,
+          boxHeight: 10,
+          usePointStyle: true,
+          pointStyle: "circle",
+          padding: 14,
+          // 구간이 좁아 막대 안에 % 를 못 그린 지점도 범례에서 비중을 볼 수 있게
+          generateLabels: (c) => c.data.datasets.map((ds, i) => ({
+            text: `${ds.label}  ${(Number(ds.data[0]) || 0).toFixed(1)}%`,
+            fillStyle: ds.backgroundColor,
+            strokeStyle: ds.backgroundColor,
+            lineWidth: 0,
+            fontColor: "#495057",
+            datasetIndex: i,
+          })),
+        },
+      },
+      tooltip: {
+        backgroundColor: "#343a46",
+        titleColor: "#ffffff",
+        bodyColor: "#ffffff",
+        borderColor: "#343a46",
+        borderWidth: 1,
+        padding: 10,
+        callbacks: {
+          title: (cs) => cs[0]?.dataset.label || "",
+          label: (c) => `${(c.parsed.x || 0).toFixed(1)}% · ${formatCurrency(c.dataset.amount || 0)}`,
+        },
+      },
+    },
+  };
+
+  if (chart && chart.canvas === ctx) {
+    chart.data = data;
+    chart.options = options;
+    chart.update();
+    return chart;
+  }
+  if (chart) chart.destroy();
+  return new Chart(ctx, { type: "bar", data, options, plugins: [stackedShareLabels] });
+}
+
 /**
  * 가로 막대 비중 차트 공통 렌더러.
  * items: [{ name, value }] — value 순으로 이미 정렬된 배열
@@ -714,7 +851,7 @@ function renderChart(startYM, endYM) {
     .filter((x) => x.value > 0)
     .sort((a, b) => b.value - a.value);
 
-  revenueChart = renderShareBarChart({
+  revenueChart = renderStackedShareBar({
     wrapId: "chart-revenue-wrap",
     canvasId: "chart-revenue",
     chart: revenueChart,
