@@ -286,6 +286,11 @@ input, select {
   height: 260px;
 }
 
+/* 월별 추이(시간축)는 세로 공간이 더 필요 */
+#chart-trend-wrap {
+  height: clamp(280px, 30vw, 360px);
+}
+
 /* ───────── 반응형 미세 조정 ───────── */
 @media (max-width: 760px) {
   .data-table th,

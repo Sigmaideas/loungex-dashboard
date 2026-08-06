@@ -52,6 +52,7 @@ const ui = {
 
 let revenueChart = null;
 let profitChart = null;
+let trendChart = null;
 
 /* ============================================================
  *  유틸 / 포맷
@@ -65,6 +66,16 @@ const formatCurrency = (n) => {
 };
 
 const formatNumber = (n) => (Number(n) || 0).toLocaleString("ko-KR");
+
+// 차트 축처럼 좁은 곳에서 쓰는 짧은 금액 표기 (예: 1.2억 / 3,400만)
+const formatCurrencyShort = (n) => {
+  const v = Number(n) || 0;
+  const sign = v < 0 ? "-" : "";
+  const abs = Math.abs(v);
+  if (abs >= 1e8) return `${sign}${(abs / 1e8).toFixed(abs >= 1e9 ? 0 : 1)}억`;
+  if (abs >= 1e4) return `${sign}${Math.round(abs / 1e4).toLocaleString("ko-KR")}만`;
+  return `${sign}${Math.round(abs).toLocaleString("ko-KR")}`;
+};
 
 const formatPercent = (rate) => `${(rate * 100).toFixed(1)}%`;
 
@@ -396,6 +407,21 @@ function getStoreMetrics(store, startYM, endYM) {
   };
 }
 
+/**
+ * 특정 월 한 달의 회사 P&L.
+ * 지점 상세 표의 "회사 P&L"과 같은 공식을 그 달 매출에 그대로 적용한다.
+ *   매출(VAT별도) - 투자자 회수금 - 식자재비 - 월 임대료 - 인건비(고정 300만)
+ */
+function getMonthlyCompanyPnl(store, monthRow) {
+  const net = (monthRow.revenue || 0) * 0.9;
+  const materialRate = state.materialRate ?? 0.3;
+  return net
+    - net * 0.2 // 투자자 회수금(회수비율 20%)
+    - net * materialRate
+    - resolveMonthlyRent(store, net)
+    - DEFAULT_MONTHLY_LABOR;
+}
+
 function getDataDateRange() {
   if (state.monthly.length === 0) {
     const now = new Date();
@@ -441,7 +467,8 @@ function renderLocked() {
   });
   if (revenueChart) { revenueChart.destroy(); revenueChart = null; }
   if (profitChart) { profitChart.destroy(); profitChart = null; }
-  ["chart-revenue-wrap", "chart-profit-wrap"].forEach((id) => {
+  if (trendChart) { trendChart.destroy(); trendChart = null; }
+  ["chart-revenue-wrap", "chart-profit-wrap", "chart-trend-wrap"].forEach((id) => {
     const wrap = document.getElementById(id);
     if (wrap) {
       wrap.style.height = "";
@@ -459,7 +486,7 @@ function renderLocked() {
   if (mtf) mtf.innerHTML = "";
   const sel = document.getElementById("monthly-store-select");
   if (sel) sel.innerHTML = "";
-  ["chart-period", "chart-profit-period"].forEach((id) => {
+  ["chart-period", "chart-profit-period", "chart-trend-period"].forEach((id) => {
     const cp = document.getElementById(id);
     if (cp) cp.textContent = "";
   });
@@ -482,6 +509,7 @@ function renderAll() {
   renderKPI(startYM, endYM);
   renderChart(startYM, endYM);
   renderProfitChart(startYM, endYM);
+  renderTrendChart(startYM, endYM);
   renderStoreTable(startYM, endYM);
   renderStoreSelect();
   renderMonthlyTable();
@@ -492,6 +520,10 @@ function renderAll() {
   const profitPeriodEl = document.getElementById("chart-profit-period");
   if (profitPeriodEl) {
     profitPeriodEl.textContent = state.stores.length === 0 ? "" : "회사 P&L · 전체 기간 월평균 기준";
+  }
+  const trendPeriodEl = document.getElementById("chart-trend-period");
+  if (trendPeriodEl) {
+    trendPeriodEl.textContent = state.stores.length === 0 ? "" : `전 지점 합계 · ${startYM} ~ ${endYM}`;
   }
 }
 
@@ -867,6 +899,133 @@ function renderChart(startYM, endYM) {
     items,
     emptyText: "선택 기간에 매출 데이터가 없습니다.",
   });
+}
+
+/* ============================================================
+ *  월별 매출·순익 추이 (시간축)
+ * ============================================================ */
+function renderTrendChart(startYM, endYM) {
+  const wrap = document.getElementById("chart-trend-wrap");
+  if (!wrap) return;
+
+  // 선택 기간의 월별로 전 지점 매출 / 회사 P&L 합산
+  const revByMonth = new Map();
+  const pnlByMonth = new Map();
+  state.monthly.forEach((m) => {
+    if (!inRange(m.yearMonth, startYM, endYM)) return;
+    const store = state.stores.find((s) => s.id === m.storeId);
+    if (!store) return;
+    revByMonth.set(m.yearMonth, (revByMonth.get(m.yearMonth) || 0) + (m.revenue || 0));
+    pnlByMonth.set(m.yearMonth, (pnlByMonth.get(m.yearMonth) || 0) + getMonthlyCompanyPnl(store, m));
+  });
+
+  const months = monthsRange(startYM, endYM).filter((ym) => revByMonth.has(ym));
+
+  if (months.length === 0) {
+    if (trendChart) { trendChart.destroy(); trendChart = null; }
+    wrap.style.height = "";
+    wrap.innerHTML = '<div class="empty-state">선택 기간에 매출 데이터가 없습니다.</div>';
+    return;
+  }
+
+  if (!document.getElementById("chart-trend")) {
+    wrap.innerHTML = '<canvas id="chart-trend"></canvas>';
+  }
+  const ctx = document.getElementById("chart-trend");
+  wrap.style.height = "";
+
+  const revenues = months.map((ym) => revByMonth.get(ym) || 0);
+  const pnls = months.map((ym) => pnlByMonth.get(ym) || 0);
+
+  // y축 단위를 하나로 통일(억 또는 만) — 억/만이 섞여 보이지 않게
+  const maxAbs = Math.max(0, ...revenues.map(Math.abs), ...pnls.map(Math.abs));
+  const axisUnit = maxAbs >= 1e8 ? 1e8 : maxAbs >= 1e4 ? 1e4 : 1;
+  const formatAxis = (v) => {
+    if (v === 0) return "0";
+    if (axisUnit === 1e8) return `${(v / 1e8).toFixed(1)}억`;
+    if (axisUnit === 1e4) return `${Math.round(v / 1e4).toLocaleString("ko-KR")}만`;
+    return Math.round(v).toLocaleString("ko-KR");
+  };
+
+  const data = {
+    labels: months,
+    datasets: [
+      {
+        type: "bar",
+        label: "매출",
+        data: revenues,
+        backgroundColor: "#296ff7",
+        borderRadius: 4,
+        borderSkipped: false,
+        maxBarThickness: 44,
+        order: 2,
+      },
+      {
+        type: "line",
+        label: "순익 (회사 P&L)",
+        data: pnls,
+        borderColor: "#23a375",
+        backgroundColor: "#23a375",
+        borderWidth: 2.5,
+        pointRadius: 3.5,
+        pointHoverRadius: 5,
+        tension: 0.25,
+        order: 1,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    scales: {
+      x: {
+        grid: { display: false },
+        border: { display: false },
+        ticks: { color: "#868e96", font: { size: 11 } },
+      },
+      y: {
+        beginAtZero: true,
+        grid: { color: "#eceef2" },
+        border: { display: false },
+        ticks: { color: "#868e96", font: { size: 11 }, callback: (v) => formatAxis(v) },
+      },
+    },
+    plugins: {
+      legend: {
+        position: "bottom",
+        labels: {
+          color: "#495057",
+          font: { size: 12 },
+          boxWidth: 10,
+          boxHeight: 10,
+          usePointStyle: true,
+          pointStyle: "circle",
+          padding: 16,
+          sort: (a, b) => a.datasetIndex - b.datasetIndex, // 매출 → 순익 순서 유지
+        },
+      },
+      tooltip: {
+        backgroundColor: "#343a46",
+        titleColor: "#ffffff",
+        bodyColor: "#ffffff",
+        borderColor: "#343a46",
+        borderWidth: 1,
+        padding: 10,
+        callbacks: { label: (c) => `${c.dataset.label}: ${formatCurrency(c.parsed.y || 0)}` },
+      },
+    },
+  };
+
+  if (trendChart && trendChart.canvas === ctx) {
+    trendChart.data = data;
+    trendChart.options = options;
+    trendChart.update();
+  } else {
+    if (trendChart) trendChart.destroy();
+    trendChart = new Chart(ctx, { type: "bar", data, options });
+  }
 }
 
 // 매장별 순익(회사 P&L) 비중 — 지점 상세 표의 "회사 P&L"과 같은 월평균·전체 기간 기준
@@ -1855,6 +2014,7 @@ function bindEvents() {
         lastNarrow = narrow;
         renderChart(ui.filterStart, ui.filterEnd);
         renderProfitChart(ui.filterStart, ui.filterEnd);
+        renderTrendChart(ui.filterStart, ui.filterEnd);
       }
     }, 150);
   });
