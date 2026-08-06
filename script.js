@@ -953,22 +953,19 @@ function renderTrendChart(startYM, endYM) {
       {
         label: "매출",
         data: revenues,
-        borderColor: "#296ff7",
         backgroundColor: "#296ff7",
-        borderWidth: 2.5,
-        pointRadius: 3.5,
-        pointHoverRadius: 5,
-        tension: 0.25,
+        borderRadius: 3,
+        borderSkipped: false,
+        maxBarThickness: 30,
       },
       {
         label: "순익 (회사 P&L)",
         data: pnls,
-        borderColor: "#23a375",
-        backgroundColor: "#23a375",
-        borderWidth: 2.5,
-        pointRadius: 3.5,
-        pointHoverRadius: 5,
-        tension: 0.25,
+        // 흑자는 초록, 적자는 빨강 — 부호가 한눈에 보이게
+        backgroundColor: pnls.map((v) => (v < 0 ? "#e5484d" : "#23a375")),
+        borderRadius: 3,
+        borderSkipped: false,
+        maxBarThickness: 30,
       },
     ],
   };
@@ -985,7 +982,8 @@ function renderTrendChart(startYM, endYM) {
       },
       y: {
         beginAtZero: true,
-        grid: { color: "#eceef2" },
+        // 0선을 진하게 — 적자 막대가 아래로 내려간 게 분명히 보이도록
+        grid: { color: (c) => (c.tick?.value === 0 ? "#b8bec8" : "#eceef2") },
         border: { display: false },
         ticks: { color: "#868e96", font: { size: 11 }, callback: (v) => formatAxis(v) },
       },
@@ -1001,7 +999,15 @@ function renderTrendChart(startYM, endYM) {
           usePointStyle: true,
           pointStyle: "circle",
           padding: 16,
-          sort: (a, b) => a.datasetIndex - b.datasetIndex, // 매출 → 순익 순서 유지
+          // 순익은 막대 색이 흑자/적자에 따라 달라지므로 범례 색은 초록으로 고정
+          generateLabels: (c) => c.data.datasets.map((ds, i) => ({
+            text: ds.label,
+            fillStyle: i === 0 ? "#296ff7" : "#23a375",
+            strokeStyle: i === 0 ? "#296ff7" : "#23a375",
+            lineWidth: 0,
+            fontColor: "#495057",
+            datasetIndex: i,
+          })),
         },
       },
       tooltip: {
@@ -1022,7 +1028,7 @@ function renderTrendChart(startYM, endYM) {
     trendChart.update();
   } else {
     if (trendChart) trendChart.destroy();
-    trendChart = new Chart(ctx, { type: "line", data, options });
+    trendChart = new Chart(ctx, { type: "bar", data, options });
   }
 }
 
