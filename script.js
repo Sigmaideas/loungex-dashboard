@@ -521,10 +521,6 @@ function renderAll() {
   if (profitPeriodEl) {
     profitPeriodEl.textContent = state.stores.length === 0 ? "" : "회사 P&L · 전체 기간 월평균 기준";
   }
-  const trendPeriodEl = document.getElementById("chart-trend-period");
-  if (trendPeriodEl) {
-    trendPeriodEl.textContent = state.stores.length === 0 ? "" : `전 지점 합계 · ${startYM} ~ ${endYM}`;
-  }
 }
 
 // 로그아웃: 토큰·데이터 삭제 후 잠금 화면
@@ -919,9 +915,20 @@ function renderTrendChart(startYM, endYM) {
     pnlByMonth.set(m.yearMonth, (pnlByMonth.get(m.yearMonth) || 0) + getMonthlyCompanyPnl(store, m));
   });
 
-  const months = monthsRange(startYM, endYM).filter((ym) => revByMonth.has(ym));
+  // 1월~12월을 모두 표시(값 없는 달은 빈칸). 필터 기간이 걸친 연도의 전체 달을 축으로 쓴다.
+  const axisStart = `${startYM.slice(0, 4)}-01`;
+  const axisEnd = `${endYM.slice(0, 4)}-12`;
+  const months = monthsRange(axisStart, axisEnd);
+  const singleYear = startYM.slice(0, 4) === endYM.slice(0, 4);
 
-  if (months.length === 0) {
+  const periodEl = document.getElementById("chart-trend-period");
+  if (periodEl) {
+    periodEl.textContent = state.stores.length === 0
+      ? ""
+      : `전 지점 합계 · ${singleYear ? `${startYM.slice(0, 4)}년` : `${axisStart} ~ ${axisEnd}`}`;
+  }
+
+  if (!months.some((ym) => revByMonth.has(ym))) {
     if (trendChart) { trendChart.destroy(); trendChart = null; }
     wrap.style.height = "";
     wrap.innerHTML = '<div class="empty-state">선택 기간에 매출 데이터가 없습니다.</div>';
@@ -934,11 +941,15 @@ function renderTrendChart(startYM, endYM) {
   const ctx = document.getElementById("chart-trend");
   wrap.style.height = "";
 
-  const revenues = months.map((ym) => revByMonth.get(ym) || 0);
-  const pnls = months.map((ym) => pnlByMonth.get(ym) || 0);
+  // 값이 없는 달은 null → 막대를 그리지 않고 빈칸으로 둔다
+  const revenues = months.map((ym) => (revByMonth.has(ym) ? revByMonth.get(ym) : null));
+  const pnls = months.map((ym) => (pnlByMonth.has(ym) ? pnlByMonth.get(ym) : null));
+  // 단일 연도면 "1월"~"12월", 여러 해에 걸치면 "2025-01" 형태
+  const labels = months.map((ym) => (singleYear ? `${Number(ym.slice(5, 7))}월` : ym));
 
   // y축 단위를 하나로 통일(억 또는 만) — 억/만이 섞여 보이지 않게
-  const maxAbs = Math.max(0, ...revenues.map(Math.abs), ...pnls.map(Math.abs));
+  const values = [...revenues, ...pnls].filter((v) => v != null);
+  const maxAbs = Math.max(0, ...values.map(Math.abs));
   const axisUnit = maxAbs >= 1e8 ? 1e8 : maxAbs >= 1e4 ? 1e4 : 1;
   const formatAxis = (v) => {
     if (v === 0) return "0";
@@ -948,7 +959,7 @@ function renderTrendChart(startYM, endYM) {
   };
 
   const data = {
-    labels: months,
+    labels,
     datasets: [
       {
         label: "매출",
