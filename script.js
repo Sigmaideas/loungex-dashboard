@@ -51,6 +51,7 @@ const ui = {
 };
 
 let revenueChart = null;
+let profitChart = null;
 
 /* ============================================================
  *  유틸 / 포맷
@@ -439,8 +440,14 @@ function renderLocked() {
     if (el) el.textContent = "";
   });
   if (revenueChart) { revenueChart.destroy(); revenueChart = null; }
-  const wrap = document.querySelector(".chart-card .chart-wrap");
-  if (wrap) wrap.innerHTML = '<div class="empty-state">로그인하면 데이터가 표시됩니다.</div>';
+  if (profitChart) { profitChart.destroy(); profitChart = null; }
+  ["chart-revenue-wrap", "chart-profit-wrap"].forEach((id) => {
+    const wrap = document.getElementById(id);
+    if (wrap) {
+      wrap.style.height = "";
+      wrap.innerHTML = '<div class="empty-state">로그인하면 데이터가 표시됩니다.</div>';
+    }
+  });
   renderStoreHead();
   const stb = document.getElementById("store-tbody");
   if (stb) stb.innerHTML = `<tr><td colspan="${STORE_COLUMNS.length}" class="empty-state">로그인이 필요합니다. 우측 상단 "로그인"을 눌러주세요.</td></tr>`;
@@ -452,8 +459,10 @@ function renderLocked() {
   if (mtf) mtf.innerHTML = "";
   const sel = document.getElementById("monthly-store-select");
   if (sel) sel.innerHTML = "";
-  const cp = document.getElementById("chart-period");
-  if (cp) cp.textContent = "";
+  ["chart-period", "chart-profit-period"].forEach((id) => {
+    const cp = document.getElementById(id);
+    if (cp) cp.textContent = "";
+  });
 }
 
 function renderAll() {
@@ -472,12 +481,18 @@ function renderAll() {
 
   renderKPI(startYM, endYM);
   renderChart(startYM, endYM);
+  renderProfitChart(startYM, endYM);
   renderStoreTable(startYM, endYM);
   renderStoreSelect();
   renderMonthlyTable();
 
   document.getElementById("chart-period").textContent =
     state.stores.length === 0 ? "" : `${startYM} ~ ${endYM}`;
+  // 회사 P&L은 지점 상세 표와 동일하게 전체 기간 월평균 기준
+  const profitPeriodEl = document.getElementById("chart-profit-period");
+  if (profitPeriodEl) {
+    profitPeriodEl.textContent = state.stores.length === 0 ? "" : "회사 P&L · 전체 기간 월평균 기준";
+  }
 }
 
 // 로그아웃: 토큰·데이터 삭제 후 잠금 화면
@@ -540,7 +555,7 @@ function renderKPI(startYM, endYM) {
 /* ============================================================
  *  매장별 매출 비중 차트 (도넛)
  * ============================================================ */
-// 가로 막대 끝에 매출 비중(%)을 직접 그려주는 플러그인
+// 가로 막대 끝에 비중(%)을 직접 그려주는 플러그인 (음수 막대는 왼쪽에 표시)
 const barShareLabels = {
   id: "barShareLabels",
   afterDatasetsDraw(chart) {
@@ -548,74 +563,79 @@ const barShareLabels = {
     if (!meta || meta.hidden) return;
     const ctx = chart.ctx;
     const values = chart.data.datasets[0].data || [];
+    const area = chart.chartArea;
     ctx.save();
     ctx.font = "600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     ctx.textBaseline = "middle";
     meta.data.forEach((bar, i) => {
       const pct = Number(values[i]) || 0;
       const text = `${pct.toFixed(1)}%`;
-      const right = chart.chartArea.right;
-      // 오른쪽 여백이 부족하면 막대 안쪽에 흰 글씨로
-      if (bar.x + 8 + ctx.measureText(text).width > right + 44) {
-        ctx.textAlign = "right";
-        ctx.fillStyle = "#ffffff";
-        ctx.fillText(text, bar.x - 8, bar.y);
-      } else {
+      const w = ctx.measureText(text).width;
+      if (pct < 0) {
+        // 왼쪽으로 뻗은 막대 → 막대 끝 왼쪽(축 영역 안쪽)에, 공간 없으면 막대 안쪽 흰 글씨
+        // area.left 를 넘어가면 y축 지점명과 겹치므로 반드시 플롯 영역 안에 그린다
+        if (bar.x - 8 - w >= area.left + 2) {
+          ctx.textAlign = "right";
+          ctx.fillStyle = "#495057";
+          ctx.fillText(text, bar.x - 8, bar.y);
+        } else {
+          ctx.textAlign = "left";
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(text, bar.x + 8, bar.y);
+        }
+      } else if (bar.x + 8 + w <= area.right + 46) {
         ctx.textAlign = "left";
         ctx.fillStyle = "#495057";
         ctx.fillText(text, bar.x + 8, bar.y);
+      } else {
+        // 오른쪽 여백이 부족하면 막대 안쪽에 흰 글씨로
+        ctx.textAlign = "right";
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(text, bar.x - 8, bar.y);
       }
     });
     ctx.restore();
   },
 };
 
-function renderChart(startYM, endYM) {
-  const wrap = document.querySelector(".chart-card .chart-wrap");
-  if (!wrap) return;
+const CHART_PALETTE = [
+  "#296ff7", "#23a375", "#e0921a", "#e5484d",
+  "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
+  "#06b6d4", "#84cc16",
+];
 
-  // 매출 비중(슬라이스 값) 높은 것부터 낮은 것 순으로 정렬
-  const items = state.stores
-    .map((store) => {
-      const m = getStoreMetrics(store, startYM, endYM);
-      return {
-        name: store.name,
-        revenue: m.totalRevenue,
-        avgMonthlyRevenue: m.avgMonthlyRevenue,
-      };
-    })
-    .filter((x) => x.revenue > 0)
-    .sort((a, b) => b.revenue - a.revenue);
+/**
+ * 가로 막대 비중 차트 공통 렌더러.
+ * items: [{ name, value }] — value 순으로 이미 정렬된 배열
+ * 비중(%) = value / 합계. 음수가 섞여 있으면(순익) 분모는 "흑자 합계"를 사용한다.
+ * 반환값: Chart 인스턴스 (데이터 없으면 null)
+ */
+function renderShareBarChart({ wrapId, canvasId, chart, items, emptyText }) {
+  const wrap = document.getElementById(wrapId);
+  if (!wrap) return chart;
 
-  const labels = items.map((x) => x.name);
-  const values = items.map((x) => x.revenue);
-
-  // 데이터 없음 → 차트 제거 후 안내 표시
-  if (labels.length === 0) {
-    if (revenueChart) {
-      revenueChart.destroy();
-      revenueChart = null;
-    }
+  if (items.length === 0) {
+    if (chart) chart.destroy();
     wrap.style.height = "";
-    wrap.innerHTML = '<div class="empty-state">선택 기간에 매출 데이터가 없습니다.</div>';
-    return;
+    wrap.innerHTML = `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
+    return null;
   }
 
   // 캔버스가 사라졌다면 복구
-  if (!document.getElementById("chart-revenue")) {
-    wrap.innerHTML = '<canvas id="chart-revenue"></canvas>';
+  if (!document.getElementById(canvasId)) {
+    wrap.innerHTML = `<canvas id="${canvasId}"></canvas>`;
   }
-  const ctx = document.getElementById("chart-revenue");
+  const ctx = document.getElementById(canvasId);
 
-  const palette = [
-    "#296ff7", "#23a375", "#e0921a", "#e5484d",
-    "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
-    "#06b6d4", "#84cc16",
-  ];
-  const colors = labels.map((_, i) => palette[i % palette.length]);
-  const total = values.reduce((s, v) => s + v, 0);
-  // 막대 길이 = 매출 비중(%)
-  const shares = values.map((v) => (total > 0 ? (v / total) * 100 : 0));
+  const labels = items.map((x) => x.name);
+  const values = items.map((x) => x.value);
+  const hasNegative = values.some((v) => v < 0);
+  // 분모: 전부 양수면 총합, 음수가 섞이면 흑자 합계(흑자 기여도 대비 적자 규모를 볼 수 있게)
+  const positiveSum = values.reduce((s, v) => s + Math.max(v, 0), 0);
+  const denom = positiveSum > 0 ? positiveSum : values.reduce((s, v) => s + Math.abs(v), 0);
+  const shares = values.map((v) => (denom > 0 ? (v / denom) * 100 : 0));
+
+  const colors = values.map((v, i) => (v < 0 ? "#e5484d" : CHART_PALETTE[i % CHART_PALETTE.length]));
 
   // 지점 수에 맞춰 차트 높이 조정(막대가 너무 두꺼워지거나 겹치지 않도록)
   wrap.style.height = `${Math.max(180, labels.length * 38 + 56)}px`;
@@ -629,20 +649,24 @@ function renderChart(startYM, endYM) {
       borderSkipped: false,
       barThickness: 22,
       maxBarThickness: 26,
-      revenue: values, // 툴팁에서 금액 표시용
+      amounts: values, // 툴팁에서 금액 표시용
     }],
   };
 
   const maxShare = Math.max(...shares, 0);
+  const minShare = Math.min(...shares, 0);
   const options = {
     indexAxis: "y", // 좌우로 긴 가로 막대
     responsive: true,
     maintainAspectRatio: false,
-    layout: { padding: { right: 52 } }, // 막대 끝 % 라벨 공간
+    layout: { padding: { right: 52 } }, // 막대 끝 % 라벨 공간(오른쪽)
     scales: {
       x: {
         beginAtZero: true,
-        max: Math.min(100, Math.ceil(maxShare * 1.1)) || 100,
+        // 전 지점 적자면 양의 영역이 필요 없으므로 0 까지만
+        max: maxShare > 0 ? Math.min(100, Math.ceil(maxShare * 1.1)) : 0,
+        // 음수 막대의 % 라벨은 플롯 영역 안에 그리므로 왼쪽 여유를 넉넉히 둔다
+        min: hasNegative ? Math.floor(minShare - Math.max(6, Math.abs(minShare) * 0.25)) : 0,
         grid: { color: "#eceef2" },
         border: { display: false },
         ticks: { color: "#868e96", font: { size: 11 }, callback: (v) => `${v}%` },
@@ -665,7 +689,7 @@ function renderChart(startYM, endYM) {
         callbacks: {
           label: (c) => {
             const pct = c.parsed.x || 0;
-            const amount = c.dataset.revenue?.[c.dataIndex] || 0;
+            const amount = c.dataset.amounts?.[c.dataIndex] || 0;
             return `${pct.toFixed(1)}% · ${formatCurrency(amount)}`;
           },
         },
@@ -673,14 +697,49 @@ function renderChart(startYM, endYM) {
     },
   };
 
-  if (revenueChart && revenueChart.canvas === ctx) {
-    revenueChart.data = data;
-    revenueChart.options = options;
-    revenueChart.update();
-  } else {
-    if (revenueChart) revenueChart.destroy();
-    revenueChart = new Chart(ctx, { type: "bar", data, options, plugins: [barShareLabels] });
+  if (chart && chart.canvas === ctx) {
+    chart.data = data;
+    chart.options = options;
+    chart.update();
+    return chart;
   }
+  if (chart) chart.destroy();
+  return new Chart(ctx, { type: "bar", data, options, plugins: [barShareLabels] });
+}
+
+function renderChart(startYM, endYM) {
+  // 매출 비중 높은 것부터 낮은 것 순으로 정렬
+  const items = state.stores
+    .map((store) => ({ name: store.name, value: getStoreMetrics(store, startYM, endYM).totalRevenue }))
+    .filter((x) => x.value > 0)
+    .sort((a, b) => b.value - a.value);
+
+  revenueChart = renderShareBarChart({
+    wrapId: "chart-revenue-wrap",
+    canvasId: "chart-revenue",
+    chart: revenueChart,
+    items,
+    emptyText: "선택 기간에 매출 데이터가 없습니다.",
+  });
+}
+
+// 매장별 순익(회사 P&L) 비중 — 지점 상세 표의 "회사 P&L"과 같은 월평균·전체 기간 기준
+function renderProfitChart(startYM, endYM) {
+  const items = state.stores
+    .map((store) => {
+      const m = getStoreMetrics(store, startYM, endYM);
+      return { name: store.name, value: m.companyPnl, revenueAll: m.totalRevenueAll };
+    })
+    .filter((x) => x.revenueAll > 0) // 매출 데이터가 없는 지점은 제외
+    .sort((a, b) => b.value - a.value);
+
+  profitChart = renderShareBarChart({
+    wrapId: "chart-profit-wrap",
+    canvasId: "chart-profit",
+    chart: profitChart,
+    items,
+    emptyText: "선택 기간에 순익 데이터가 없습니다.",
+  });
 }
 
 /* ============================================================
@@ -1649,6 +1708,7 @@ function bindEvents() {
       if (narrow !== lastNarrow) {
         lastNarrow = narrow;
         renderChart(ui.filterStart, ui.filterEnd);
+        renderProfitChart(ui.filterStart, ui.filterEnd);
       }
     }, 150);
   });
