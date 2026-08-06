@@ -598,6 +598,15 @@ const barShareLabels = {
   },
 };
 
+// 차트 라벨용 짧은 지점명 — 공통 접두어 "라운지엑스24h" 제거 (원본 store.name 은 그대로 둠)
+const shortStoreName = (name) => {
+  const short = String(name || "")
+    .replace(/라운지엑스\s*24\s*h/gi, "")
+    .replace(/^[\s\-–—_·]+|[\s\-–—_·]+$/g, "")
+    .replace(/\s+/g, " ");
+  return short || String(name || ""); // 이름 전체가 접두어뿐이면 원본 유지
+};
+
 const CHART_PALETTE = [
   "#296ff7", "#23a375", "#e0921a", "#e5484d",
   "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
@@ -847,7 +856,7 @@ function renderShareBarChart({ wrapId, canvasId, chart, items, emptyText }) {
 function renderChart(startYM, endYM) {
   // 매출 비중 높은 것부터 낮은 것 순으로 정렬
   const items = state.stores
-    .map((store) => ({ name: store.name, value: getStoreMetrics(store, startYM, endYM).totalRevenue }))
+    .map((store) => ({ name: shortStoreName(store.name), value: getStoreMetrics(store, startYM, endYM).totalRevenue }))
     .filter((x) => x.value > 0)
     .sort((a, b) => b.value - a.value);
 
@@ -865,7 +874,7 @@ function renderProfitChart(startYM, endYM) {
   const items = state.stores
     .map((store) => {
       const m = getStoreMetrics(store, startYM, endYM);
-      return { name: store.name, value: m.companyPnl, revenueAll: m.totalRevenueAll };
+      return { name: shortStoreName(store.name), value: m.companyPnl, revenueAll: m.totalRevenueAll };
     })
     .filter((x) => x.revenueAll > 0) // 매출 데이터가 없는 지점은 제외
     .sort((a, b) => b.value - a.value);
