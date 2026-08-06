@@ -915,17 +915,13 @@ function renderTrendChart(startYM, endYM) {
     pnlByMonth.set(m.yearMonth, (pnlByMonth.get(m.yearMonth) || 0) + getMonthlyCompanyPnl(store, m));
   });
 
-  // 1월~12월을 모두 표시(값 없는 달은 빈칸). 필터 기간이 걸친 연도의 전체 달을 축으로 쓴다.
-  const axisStart = `${startYM.slice(0, 4)}-01`;
-  const axisEnd = `${endYM.slice(0, 4)}-12`;
-  const months = monthsRange(axisStart, axisEnd);
+  // 상단 기간 선택 그대로를 시간축으로 사용(값 없는 달은 빈칸으로 둠)
+  const months = monthsRange(startYM, endYM);
   const singleYear = startYM.slice(0, 4) === endYM.slice(0, 4);
 
   const periodEl = document.getElementById("chart-trend-period");
   if (periodEl) {
-    periodEl.textContent = state.stores.length === 0
-      ? ""
-      : `전 지점 합계 · ${singleYear ? `${startYM.slice(0, 4)}년` : `${axisStart} ~ ${axisEnd}`}`;
+    periodEl.textContent = state.stores.length === 0 ? "" : `전 지점 합계 · ${startYM} ~ ${endYM}`;
   }
 
   if (!months.some((ym) => revByMonth.has(ym))) {
@@ -946,6 +942,8 @@ function renderTrendChart(startYM, endYM) {
   const pnls = months.map((ym) => (pnlByMonth.has(ym) ? pnlByMonth.get(ym) : null));
   // 단일 연도면 "1월"~"12월", 여러 해에 걸치면 "2025-01" 형태
   const labels = months.map((ym) => (singleYear ? `${Number(ym.slice(5, 7))}월` : ym));
+  // 짧은 기간을 선택하면 막대가 지나치게 가늘어 보이지 않게 두께를 키운다
+  const barThickness = months.length <= 6 ? 48 : 30;
 
   // y축 단위를 하나로 통일(억 또는 만) — 억/만이 섞여 보이지 않게
   const values = [...revenues, ...pnls].filter((v) => v != null);
@@ -967,7 +965,7 @@ function renderTrendChart(startYM, endYM) {
         backgroundColor: "#296ff7",
         borderRadius: 3,
         borderSkipped: false,
-        maxBarThickness: 30,
+        maxBarThickness: barThickness,
       },
       {
         label: "순익 (회사 P&L)",
@@ -976,7 +974,7 @@ function renderTrendChart(startYM, endYM) {
         backgroundColor: pnls.map((v) => (v < 0 ? "#e5484d" : "#23a375")),
         borderRadius: 3,
         borderSkipped: false,
-        maxBarThickness: 30,
+        maxBarThickness: barThickness,
       },
     ],
   };
