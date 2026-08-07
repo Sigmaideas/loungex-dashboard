@@ -591,51 +591,8 @@ function renderKPI(startYM, endYM) {
 }
 
 /* ============================================================
- *  매장별 매출 비중 차트 (도넛)
+ *  매장별 비중 차트 (100% 누적 가로 막대)
  * ============================================================ */
-// 가로 막대 끝에 비중(%)을 직접 그려주는 플러그인 (음수 막대는 왼쪽에 표시)
-const barShareLabels = {
-  id: "barShareLabels",
-  afterDatasetsDraw(chart) {
-    const meta = chart.getDatasetMeta(0);
-    if (!meta || meta.hidden) return;
-    const ctx = chart.ctx;
-    const values = chart.data.datasets[0].data || [];
-    const area = chart.chartArea;
-    ctx.save();
-    ctx.font = "600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    ctx.textBaseline = "middle";
-    meta.data.forEach((bar, i) => {
-      const pct = Number(values[i]) || 0;
-      const text = `${pct.toFixed(1)}%`;
-      const w = ctx.measureText(text).width;
-      if (pct < 0) {
-        // 왼쪽으로 뻗은 막대 → 막대 끝 왼쪽(축 영역 안쪽)에, 공간 없으면 막대 안쪽 흰 글씨
-        // area.left 를 넘어가면 y축 지점명과 겹치므로 반드시 플롯 영역 안에 그린다
-        if (bar.x - 8 - w >= area.left + 2) {
-          ctx.textAlign = "right";
-          ctx.fillStyle = "#495057";
-          ctx.fillText(text, bar.x - 8, bar.y);
-        } else {
-          ctx.textAlign = "left";
-          ctx.fillStyle = "#ffffff";
-          ctx.fillText(text, bar.x + 8, bar.y);
-        }
-      } else if (bar.x + 8 + w <= area.right + 46) {
-        ctx.textAlign = "left";
-        ctx.fillStyle = "#495057";
-        ctx.fillText(text, bar.x + 8, bar.y);
-      } else {
-        // 오른쪽 여백이 부족하면 막대 안쪽에 흰 글씨로
-        ctx.textAlign = "right";
-        ctx.fillStyle = "#ffffff";
-        ctx.fillText(text, bar.x - 8, bar.y);
-      }
-    });
-    ctx.restore();
-  },
-};
-
 // 차트 라벨용 짧은 지점명 — 공통 접두어 "라운지엑스24h" 제거 (원본 store.name 은 그대로 둠)
 const shortStoreName = (name) => {
   const short = String(name || "")
@@ -704,7 +661,13 @@ function renderStackedShareBar({ wrapId, canvasId, chart, items, emptyText }) {
   }
   const ctx = document.getElementById(canvasId);
 
-  const total = items.reduce((s, x) => s + x.value, 0);
+  // 분모: 전부 양수면 총합, 음수(적자)가 섞이면 흑자 합계
+  // → 흑자 지점은 0에서 오른쪽으로 쌓여 합이 100%, 적자 지점은 0에서 왼쪽으로 뻗는다
+  const positiveSum = items.reduce((s, x) => s + Math.max(x.value, 0), 0);
+  const denom = positiveSum > 0 ? positiveSum : items.reduce((s, x) => s + Math.abs(x.value), 0);
+  const hasNegative = items.some((x) => x.value < 0);
+  const negativeShare = items.reduce((s, x) => s + Math.min(x.value, 0), 0) / (denom || 1) * 100;
+
   // 막대 + x축 + 범례(지점 4개당 한 줄) 높이
   wrap.style.height = `${112 + Math.ceil(items.length / 4) * 26}px`;
 
@@ -712,10 +675,11 @@ function renderStackedShareBar({ wrapId, canvasId, chart, items, emptyText }) {
     labels: [""],
     datasets: items.map((x, i) => ({
       label: x.name,
-      data: [total > 0 ? (x.value / total) * 100 : 0],
+      data: [denom > 0 ? (x.value / denom) * 100 : 0],
       amount: x.value,
       backgroundColor: CHART_PALETTE[i % CHART_PALETTE.length],
-      borderRadius: {
+      // 음수가 섞이면 어느 구간이 양 끝인지 정해지지 않으므로 모두 살짝만 둥글게
+      borderRadius: hasNegative ? 2 : {
         topLeft: i === 0 ? 6 : 0,
         bottomLeft: i === 0 ? 6 : 0,
         topRight: i === items.length - 1 ? 6 : 0,
@@ -733,11 +697,18 @@ function renderStackedShareBar({ wrapId, canvasId, chart, items, emptyText }) {
     scales: {
       x: {
         stacked: true,
-        min: 0,
+        // 적자 지점이 있으면 0 왼쪽으로 그만큼 축을 넓힌다
+        min: hasNegative ? Math.floor((negativeShare - 4) / 5) * 5 : 0,
         max: 100,
-        grid: { color: "#eceef2" },
+        grid: { color: (c) => (c.tick?.value === 0 && hasNegative ? "#b8bec8" : "#eceef2") },
         border: { display: false },
-        ticks: { color: "#868e96", font: { size: 11 }, stepSize: 25, callback: (v) => `${v}%` },
+        // 음수 구간이 있으면 눈금 간격은 Chart.js 자동 계산에 맡긴다(축 끝 라벨 겹침 방지)
+        ticks: {
+          color: "#868e96",
+          font: { size: 11 },
+          stepSize: hasNegative ? undefined : 25,
+          callback: (v) => `${v}%`,
+        },
       },
       y: { stacked: true, grid: { display: false }, border: { display: false }, ticks: { display: false } },
     },
@@ -786,109 +757,6 @@ function renderStackedShareBar({ wrapId, canvasId, chart, items, emptyText }) {
   }
   if (chart) chart.destroy();
   return new Chart(ctx, { type: "bar", data, options, plugins: [stackedShareLabels] });
-}
-
-/**
- * 가로 막대 비중 차트 공통 렌더러.
- * items: [{ name, value }] — value 순으로 이미 정렬된 배열
- * 비중(%) = value / 합계. 음수가 섞여 있으면(순익) 분모는 "흑자 합계"를 사용한다.
- * 반환값: Chart 인스턴스 (데이터 없으면 null)
- */
-function renderShareBarChart({ wrapId, canvasId, chart, items, emptyText }) {
-  const wrap = document.getElementById(wrapId);
-  if (!wrap) return chart;
-
-  if (items.length === 0) {
-    if (chart) chart.destroy();
-    wrap.style.height = "";
-    wrap.innerHTML = `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
-    return null;
-  }
-
-  // 캔버스가 사라졌다면 복구
-  if (!document.getElementById(canvasId)) {
-    wrap.innerHTML = `<canvas id="${canvasId}"></canvas>`;
-  }
-  const ctx = document.getElementById(canvasId);
-
-  const labels = items.map((x) => x.name);
-  const values = items.map((x) => x.value);
-  const hasNegative = values.some((v) => v < 0);
-  // 분모: 전부 양수면 총합, 음수가 섞이면 흑자 합계(흑자 기여도 대비 적자 규모를 볼 수 있게)
-  const positiveSum = values.reduce((s, v) => s + Math.max(v, 0), 0);
-  const denom = positiveSum > 0 ? positiveSum : values.reduce((s, v) => s + Math.abs(v), 0);
-  const shares = values.map((v) => (denom > 0 ? (v / denom) * 100 : 0));
-
-  const colors = values.map((v, i) => (v < 0 ? "#e5484d" : CHART_PALETTE[i % CHART_PALETTE.length]));
-
-  // 지점 수에 맞춰 차트 높이 조정(막대가 너무 두꺼워지거나 겹치지 않도록)
-  wrap.style.height = `${Math.max(180, labels.length * 38 + 56)}px`;
-
-  const data = {
-    labels,
-    datasets: [{
-      data: shares,
-      backgroundColor: colors,
-      borderRadius: 4,
-      borderSkipped: false,
-      barThickness: 22,
-      maxBarThickness: 26,
-      amounts: values, // 툴팁에서 금액 표시용
-    }],
-  };
-
-  const maxShare = Math.max(...shares, 0);
-  const minShare = Math.min(...shares, 0);
-  const options = {
-    indexAxis: "y", // 좌우로 긴 가로 막대
-    responsive: true,
-    maintainAspectRatio: false,
-    layout: { padding: { right: 52 } }, // 막대 끝 % 라벨 공간(오른쪽)
-    scales: {
-      x: {
-        beginAtZero: true,
-        // 전 지점 적자면 양의 영역이 필요 없으므로 0 까지만
-        max: maxShare > 0 ? Math.min(100, Math.ceil(maxShare * 1.1)) : 0,
-        // 음수 막대의 % 라벨은 플롯 영역 안에 그리므로 왼쪽 여유를 넉넉히 둔다
-        min: hasNegative ? Math.floor(minShare - Math.max(6, Math.abs(minShare) * 0.25)) : 0,
-        grid: { color: "#eceef2" },
-        border: { display: false },
-        ticks: { color: "#868e96", font: { size: 11 }, callback: (v) => `${v}%` },
-      },
-      y: {
-        grid: { display: false },
-        border: { display: false },
-        ticks: { color: "#495057", font: { size: 12 } },
-      },
-    },
-    plugins: {
-      legend: { display: false }, // 지점명은 y축에 표시되므로 범례 불필요
-      tooltip: {
-        backgroundColor: "#343a46",
-        titleColor: "#ffffff",
-        bodyColor: "#ffffff",
-        borderColor: "#343a46",
-        borderWidth: 1,
-        padding: 10,
-        callbacks: {
-          label: (c) => {
-            const pct = c.parsed.x || 0;
-            const amount = c.dataset.amounts?.[c.dataIndex] || 0;
-            return `${pct.toFixed(1)}% · ${formatCurrency(amount)}`;
-          },
-        },
-      },
-    },
-  };
-
-  if (chart && chart.canvas === ctx) {
-    chart.data = data;
-    chart.options = options;
-    chart.update();
-    return chart;
-  }
-  if (chart) chart.destroy();
-  return new Chart(ctx, { type: "bar", data, options, plugins: [barShareLabels] });
 }
 
 function renderChart(startYM, endYM) {
@@ -1061,7 +929,7 @@ function renderProfitChart(startYM, endYM) {
     .filter((x) => x.revenueAll > 0) // 매출 데이터가 없는 지점은 제외
     .sort((a, b) => b.value - a.value);
 
-  profitChart = renderShareBarChart({
+  profitChart = renderStackedShareBar({
     wrapId: "chart-profit-wrap",
     canvasId: "chart-profit",
     chart: profitChart,
