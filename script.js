@@ -409,17 +409,27 @@ function getStoreMetrics(store, startYM, endYM) {
 
 /**
  * 특정 월 한 달의 회사 P&L.
- * 지점 상세 표의 "회사 P&L"과 같은 공식을 그 달 매출에 그대로 적용한다.
- *   매출(VAT별도) - 투자자 회수금 - 식자재비 - 월 임대료 - 인건비(고정 300만)
+ * 지점 상세 표의 "회사 P&L"과 같은 공식을 그 달 매출에 적용하되,
+ * 고정비(임대료·인건비)는 실제 운영일 기준으로 일할 계산한다.
+ *   매출(VAT별도) - 투자자 회수금 - 식자재비 - 임대료×일할 - 인건비×일할
+ * 임대료를 "매출 %"로 설정한 지점은 이미 그 달 매출에 비례하므로 일할을 또 적용하지 않는다.
  */
 function getMonthlyCompanyPnl(store, monthRow) {
   const net = (monthRow.revenue || 0) * 0.9;
   const materialRate = state.materialRate ?? 0.3;
+
+  const daysInMonth = daysInYearMonth(monthRow.yearMonth);
+  const opDays = getOperatingDays(store, monthRow);
+  const dayRatio = daysInMonth > 0 ? Math.min(1, Math.max(0, opDays / daysInMonth)) : 1;
+
+  const rent = resolveMonthlyRent(store, net);
+  const rentCost = getRentRate(store) != null ? rent : rent * dayRatio;
+
   return net
     - net * 0.2 // 투자자 회수금(회수비율 20%)
     - net * materialRate
-    - resolveMonthlyRent(store, net)
-    - DEFAULT_MONTHLY_LABOR;
+    - rentCost
+    - DEFAULT_MONTHLY_LABOR * dayRatio;
 }
 
 function getDataDateRange() {
