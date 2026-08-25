@@ -757,7 +757,7 @@ function renderTrendChart(startYM, endYM) {
   const wrap = document.getElementById("chart-trend-wrap");
   if (!wrap) return;
 
-  // 지점 × 월 매출 — 한 달의 막대를 지점별로 쌓아 총매출과 구성을 함께 본다
+  // 지점 × 월 매출 — 지점마다 하나의 추세선
   const revByStoreMonth = new Map(); // storeId -> Map(yearMonth -> revenue)
   const totalByStore = new Map();
   state.monthly.forEach((m) => {
@@ -794,32 +794,38 @@ function renderTrendChart(startYM, endYM) {
     wrap.innerHTML = '<canvas id="chart-trend"></canvas>';
   }
   const ctx = document.getElementById("chart-trend");
-  // 막대 + x축 + 범례(지점 4개당 한 줄) 높이
+  // 선 영역 + x축 + 범례(지점 4개당 한 줄) 높이
   wrap.style.height = `${260 + Math.ceil(storeRows.length / 4) * 24}px`;
 
   // 단일 연도면 "1월"~"12월", 여러 해에 걸치면 "2025-01" 형태
   const labels = months.map((ym) => (singleYear ? `${Number(ym.slice(5, 7))}월` : ym));
-  // 짧은 기간을 선택하면 막대가 지나치게 가늘어 보이지 않게 두께를 키운다
-  const barThickness = months.length <= 6 ? 64 : 40;
-
-  // 값이 없는 달은 null → 막대를 그리지 않고 빈칸으로 둔다
+  // 값이 없는 달은 null → 점을 찍지 않고 선을 끊어 둔다(spanGaps: false)
   const datasets = storeRows.map((store, i) => {
     const byMonth = revByStoreMonth.get(store.id) || new Map();
+    const color = CHART_PALETTE[i % CHART_PALETTE.length];
     return {
       label: shortStoreName(store.name),
       data: months.map((ym) => (byMonth.has(ym) ? byMonth.get(ym) : null)),
-      backgroundColor: CHART_PALETTE[i % CHART_PALETTE.length],
-      borderRadius: 2,
-      borderSkipped: false,
-      maxBarThickness: barThickness,
+      borderColor: color,
+      backgroundColor: color,
+      pointBackgroundColor: color,
+      pointBorderColor: "#ffffff",
+      pointBorderWidth: 2,
+      borderWidth: 2.5,
+      pointRadius: 4,
+      pointHoverRadius: 6,
+      tension: 0.3, // 살짝만 부드럽게 — 실제 값에서 크게 벗어나지 않는 정도
+      spanGaps: false,
+      fill: false,
     };
   });
 
-  // y축 단위를 하나로 통일(억 또는 만) — 억/만이 섞여 보이지 않게, 기준은 월 합계
+  // 월 합계는 툴팁 하단에만 쓴다(선은 지점별 값 그대로 그린다)
   const monthTotals = months.map((ym, mi) =>
     datasets.reduce((s, ds) => s + (ds.data[mi] || 0), 0)
   );
-  const maxAbs = Math.max(0, ...monthTotals.map(Math.abs));
+  // y축 단위를 하나로 통일(억 또는 만) — 억/만이 섞여 보이지 않게
+  const maxAbs = Math.max(0, ...datasets.flatMap((ds) => ds.data.filter((v) => v != null).map(Math.abs)));
   const axisUnit = maxAbs >= 1e8 ? 1e8 : maxAbs >= 1e4 ? 1e4 : 1;
   const formatAxis = (v) => {
     if (v === 0) return "0";
@@ -836,13 +842,11 @@ function renderTrendChart(startYM, endYM) {
     interaction: { mode: "index", intersect: false },
     scales: {
       x: {
-        stacked: true,
         grid: { display: false },
         border: { display: false },
         ticks: { color: "#868e96", font: { size: 11 } },
       },
       y: {
-        stacked: true,
         beginAtZero: true,
         grid: { color: "#eceef2" },
         border: { display: false },
@@ -889,7 +893,7 @@ function renderTrendChart(startYM, endYM) {
     trendChart.update();
   } else {
     if (trendChart) trendChart.destroy();
-    trendChart = new Chart(ctx, { type: "bar", data, options });
+    trendChart = new Chart(ctx, { type: "line", data, options });
   }
 }
 
