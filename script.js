@@ -737,7 +737,7 @@ function metricCell(label, value, unit, yesterday) {
     </div>`;
 }
 
-/* 지난달 대비 일평균 주문건수 변화율 */
+/* 지난달 대비 매출 변화율 — 이번 달은 한 달 예상치로 환산해 비교한다 */
 function monthChangeMark(pct) {
   if (!Number.isFinite(pct)) return "";
   const rounded = Math.round(pct);
@@ -747,10 +747,10 @@ function monthChangeMark(pct) {
   return `<span class="branch-month ${dir}">지난달 대비 ${arrow}${Math.abs(rounded)}%</span>`;
 }
 
-/* 카드 배경 스파크라인 — 최근 6개월 일별 주문건수의 7일 이동평균.
+/* 카드 배경 스파크라인 — 최근 6개월 일별 매출의 7일 이동평균.
    · 원본 일별 값은 요일 편차가 커서 6개월치를 그대로 그리면 톱니만 보인다.
-   · 세로축을 0이 아니라 데이터 최소~최대로 잡는다. 0 기준이면 하루 90~130건 같은
-     20~30% 변동이 위쪽에 붙어 직선처럼 보이기 때문. */
+   · 세로축을 0이 아니라 데이터 최소~최대로 잡는다. 0 기준이면 20~30% 변동이
+     위쪽에 붙어 직선처럼 보이기 때문. */
 function sparkline(series) {
   const raw = (series || []).filter((v) => Number.isFinite(v));
   if (raw.length < 14) return "";
@@ -1578,7 +1578,7 @@ async function barisFetchDailySeries(branchID, token) {
 
   const todayKey = `${ymKey(now)}${pad(now.getDate())}`;
   return {
-    series: all.map((r) => r.orders),
+    series: all.map((r) => r.sales),
     monthChange: monthOverMonthChange(last, cur, now),
     ydayOrders: ydayRow?.orders,
     ydayProduced: ydayRow?.produced,
@@ -1591,6 +1591,8 @@ async function barisFetchMonthDays(branchID, yyyymm, token) {
   return (j?.payload?.data || [])
     .map((r) => ({
       date: String(r.date),
+      // 매출은 환불을 뺀 순매출 (지점 상세의 월 매출과 같은 기준)
+      sales: Math.max(0, (toFiniteNumber(r.tot_sell_today) ?? 0) - (toFiniteNumber(r.tot_refund_today) ?? 0)),
       orders: toFiniteNumber(r.order_cnt_today) ?? 0,
       produced: toFiniteNumber(r.product_cnt_today) ?? 0,
       weather: r.weather || "",
@@ -1599,18 +1601,26 @@ async function barisFetchMonthDays(branchID, yyyymm, token) {
 }
 
 /**
- * 지난달 대비 변화율(%) — 이번 달은 아직 진행 중이라 총합끼리 비교하면 항상 마이너스다.
- * 그래서 "하루 평균 주문건수"로 비교하고, 오늘은 아직 안 끝났으니 어제까지만 센다.
+ * 지난달 대비 매출 변화율(%).
+ *
+ * 이번 달은 아직 진행 중이라 총합끼리 바로 비교하면 매달 초에 -80% 씩 나온다.
+ * 그래서 어제까지의 하루 평균 매출로 이번 달 전체를 추정해 지난달 실제 매출과 비교한다.
+ *   예상 이번 달 = (어제까지 매출 합 ÷ 지난 일수) × 이번 달 총 일수
+ *   변화율 = (예상 이번 달 − 지난달 실제) ÷ 지난달 실제
+ * 오늘은 아직 안 끝났으므로 평균 계산에서 제외한다. 1일이면 표시하지 않는다.
  */
 function monthOverMonthChange(lastDays, curDays, now) {
   const todayKey = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const done = curDays.filter((r) => r.date < todayKey);
   if (lastDays.length === 0 || done.length === 0) return undefined;
 
-  const avg = (rows) => rows.reduce((sum, r) => sum + r.orders, 0) / rows.length;
-  const lastAvg = avg(lastDays);
-  if (lastAvg <= 0) return undefined;
-  return ((avg(done) - lastAvg) / lastAvg) * 100;
+  const sum = (rows) => rows.reduce((acc, r) => acc + r.sales, 0);
+  const lastTotal = sum(lastDays);
+  if (lastTotal <= 0) return undefined;
+
+  const daysThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const projected = (sum(done) / done.length) * daysThisMonth;
+  return ((projected - lastTotal) / lastTotal) * 100;
 }
 
 async function barisFetchOwnBranches(token) {
