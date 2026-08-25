@@ -88,7 +88,7 @@ npx serve .
 ## 6. 파일 구조
 
 ```
-loungex-pnl-dashboard/
+loungex-dashboard/
 ├── index.html      # 마크업
 ├── style.css       # 다크 테마 스타일
 ├── script.js       # 상태/렌더/저장 로직
