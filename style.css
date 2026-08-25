@@ -344,7 +344,7 @@ input, select {
 .branch-card {
   position: relative;
   overflow: hidden;
-  min-height: 186px; /* 배경 그래프가 글씨와 겹치지 않을 만큼의 아래 여백 */
+  min-height: 194px; /* 배경 그래프가 글씨와 겹치지 않을 만큼의 아래 여백 */
   padding: 20px 22px 26px;
   border-radius: 14px;
   box-sizing: border-box;
@@ -454,7 +454,7 @@ input, select {
 
 /* 판매 상태 알약 — 한 칸 아래 왼쪽 정렬 */
 .branch-card-sale {
-  margin-top: 8px;
+  margin-top: 16px;
 }
 
 .branch-card-sale:empty { display: none; }
