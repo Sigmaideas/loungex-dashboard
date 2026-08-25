@@ -562,12 +562,45 @@ function renderBranchStatus() {
   // 지점 하나당 사각형 하나 — 바리스 홈의 로봇 타일과 같은 표기
   const bars = document.getElementById("status-bars");
   if (!bars) return;
-  bars.innerHTML = (s.branches || []).map((b) => {
+  bars.innerHTML = (s.branches || []).map((b, i) => {
     const cls = b.status === "OPERATING" ? "operating" : b.status === "NO_DATA" ? "nodata" : "idle";
-    const label = b.status === "OPERATING" ? "운영중" : b.status === "NO_DATA" ? "데이터 없음" : "미운영";
-    const tip = `${shortStoreName(b.branchName)} · ${label}\n총 가동률 ${b.totalRate}%\n운영중 ${formatMinutes(b.runTime)} / 미운영 ${formatMinutes(b.downTime)}`;
-    return `<div class="status-bar ${cls}" title="${escapeHtml(tip)}"></div>`;
+    return `<div class="status-bar ${cls}" data-branch-index="${i}"></div>`;
   }).join("");
+  hideBranchTooltip();
+}
+
+/* ── 타일 hover 툴팁 — 바리스 홈의 툴팁 내용을 그대로 옮긴 것 ──
+ *   지점명 / 총 가동률 / 운영중 · 미운영 시간
+ *   데이터 없음(NO_DATA) 타일은 바리스와 마찬가지로 툴팁을 띄우지 않는다. */
+function showBranchTooltip(tile) {
+  const tip = document.getElementById("status-tooltip");
+  const list = branchStatusSummary?.branches || [];
+  const b = list[Number(tile.dataset.branchIndex)];
+  if (!tip || !b || tile.classList.contains("nodata")) return;
+
+  tip.innerHTML = `
+    <div class="tip-title">${escapeHtml(b.branchName || "지점 정보 없음")}</div>
+    <div class="tip-row tip-rate"><span>총 가동률</span><span>${b.totalRate}%</span></div>
+    <div class="tip-sep"></div>
+    <div class="tip-row"><span>운영중</span><span>${formatMinutes(b.runTime)}</span></div>
+    <div class="tip-row"><span>미운영</span><span>${formatMinutes(b.downTime)}</span></div>
+  `;
+  tip.hidden = false;
+
+  // 타일 아래 중앙에 붙이되, 화면 밖으로 나가면 안으로 밀어넣고 꼬리만 타일 쪽에 남긴다
+  const r = tile.getBoundingClientRect();
+  const w = tip.offsetWidth;
+  const margin = 8;
+  const center = r.left + r.width / 2;
+  const left = Math.min(Math.max(center - w / 2, margin), window.innerWidth - w - margin);
+  tip.style.left = `${left}px`;
+  tip.style.top = `${r.bottom + 10}px`;
+  tip.style.setProperty("--arrow-left", `${center - left}px`);
+}
+
+function hideBranchTooltip() {
+  const tip = document.getElementById("status-tooltip");
+  if (tip) tip.hidden = true;
 }
 
 // 분 → "N시간 M분" (바리스 툴팁 표기와 동일)
@@ -1970,6 +2003,23 @@ function bindEvents() {
     renderStoreTable(ui.filterStart, ui.filterEnd);
     renderStoreSelect();
   });
+
+  // 지점 상태 타일 툴팁
+  const barsEl = document.getElementById("status-bars");
+  if (barsEl) {
+    barsEl.addEventListener("mouseover", (e) => {
+      const tile = e.target.closest(".status-bar");
+      if (tile) showBranchTooltip(tile);
+    });
+    barsEl.addEventListener("mouseout", (e) => {
+      const tile = e.target.closest(".status-bar");
+      if (tile && !barsEl.contains(e.relatedTarget)) hideBranchTooltip();
+      else if (tile && e.relatedTarget?.closest?.(".status-bar") !== tile) hideBranchTooltip();
+    });
+    barsEl.addEventListener("mouseleave", hideBranchTooltip);
+  }
+  // 스크롤하면 타일 위치가 어긋나므로 툴팁을 닫는다
+  window.addEventListener("scroll", hideBranchTooltip, { passive: true });
 
   // 삭제 + 타입 토글 위임
   document.body.addEventListener("click", (e) => {

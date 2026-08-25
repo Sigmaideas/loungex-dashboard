@@ -323,6 +323,56 @@ input, select {
   .status-bars { grid-template-columns: repeat(12, minmax(0, 1fr)); }
 }
 
+.status-bar:not(.nodata) { cursor: pointer; }
+
+/* 타일 툴팁 — 바리스 홈 툴팁(흰 카드 + 아래쪽 화살표)과 같은 구성 */
+.status-tooltip {
+  position: fixed;
+  z-index: 60;
+  width: 202px; /* 내용 170px + 좌우 패딩 16px */
+  padding: 16px;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+}
+
+.status-tooltip[hidden] { display: none; }
+
+/* 타일 아래에 붙는 말풍선 꼬리 */
+.status-tooltip::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: var(--arrow-left, 50%);
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  background: #ffffff;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.tip-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #a5a7ac;
+}
+
+.tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #4b5059;
+  font-variant-numeric: tabular-nums;
+}
+
+.tip-rate { margin-top: 8px; }
+.tip-sep { margin: 8px 0; height: 1px; background: #e8e9ea; }
+.tip-row + .tip-row { margin-top: 6px; }
+
 /* ───────── KPI ───────── */
 .kpi-grid {
   display: grid;
