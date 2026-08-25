@@ -254,9 +254,23 @@ input, select {
 }
 
 .today-weather {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 15px;
   font-weight: 500;
   color: #4b5059;
+}
+
+.weather-icon {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.weather-temp {
+  color: #8c919b;
+  font-variant-numeric: tabular-nums;
 }
 
 .today-weather[hidden] { display: none; }

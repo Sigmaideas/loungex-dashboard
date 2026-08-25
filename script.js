@@ -522,21 +522,32 @@ async function refreshBranchStatus() {
         detailErrors.push(`${b.branchName}: branchId 없음`);
         return;
       }
+      // 캘린더 API는 세션의 "현재 지점"에 묶여 있어 지점 전환 토큰이 필요하다.
+      // 지점당 한 번만 전환해 두 조회에 함께 쓴다(전환 실패 시 기본 토큰으로 시도).
+      let branchToken = token;
       try {
-        Object.assign(b, await barisFetchBranchDashboard(b.branchId, token));
+        branchToken = await barisChangeBranch(b.branchId, token);
       } catch (e) {
-        detailErrors.push(`${b.branchName}: ${e.message}`);
+        detailErrors.push(`${b.branchName}: 지점 전환 실패 (${e.message})`);
       }
       try {
-        Object.assign(b, await barisFetchDailySeries(b.branchId, token));
-      } catch {
-        // 일별 실적이 없으면 증감·배경 그래프만 빠진다
+        Object.assign(b, await barisFetchBranchDashboard(b.branchId, branchToken));
+      } catch (e) {
+        detailErrors.push(`${b.branchName}: 오늘 지표 (${e.message})`);
+      }
+      try {
+        Object.assign(b, await barisFetchDailySeries(b.branchId, branchToken));
+      } catch (e) {
+        detailErrors.push(`${b.branchName}: 일별 실적 (${e.message})`);
       }
     });
     const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
+    const graphed = mine.filter((b) => (b.series || []).length > 0).length;
     if (detailErrors.length) console.warn("[지점 상세 조회 실패]", detailErrors);
-    // 전 지점 실패면 숫자가 하나도 안 나오므로 원인을 화면에도 알린다
-    if (ok === 0 && detailErrors.length) showToast(`지점 상세 조회 실패 — ${detailErrors[0]}`);
+    // 오늘 지표든 배경 그래프든 전 지점이 비면 원인을 화면에도 알린다
+    if ((ok === 0 || graphed === 0) && detailErrors.length) {
+      showToast(`지점 상세 조회 실패 — ${detailErrors[0]}`);
+    }
   } catch (e) {
     console.warn("[지점 운영 현황 조회 실패]", e?.message || e);
     branchStatusSummary = null; // 조회 실패 시 카드 자체를 감춘다(빈 값 표시 방지)
@@ -544,18 +555,91 @@ async function refreshBranchStatus() {
   renderBranchStatus();
 }
 
-// 바리스 매출 캘린더가 주는 날씨 문자열 → 이모지
-const WEATHER_ICON = {
-  "맑음": "☀️",
-  "구름많음": "⛅",
-  "흐림": "☁️",
-  "비": "🌧️",
-  "비/눈": "🌨️",
-  "눈": "❄️",
-  "소나기": "🌦️",
+/* ── 오늘 날씨 ──────────────────────────────────────────────
+ *  Open-Meteo(무료·키 불필요·CORS 허용)에서 서울 현재 날씨를 받는다.
+ *  실패하면 바리스 매출 캘린더가 주는 그날의 weather 문자열로 대체한다. */
+const SEOUL = { lat: 37.5665, lon: 126.978 };
+
+// WMO 날씨 코드 → { 아이콘 종류, 한국어 }
+function wmoToWeather(code) {
+  const c = Number(code);
+  if (c === 0) return { kind: "clear", label: "맑음" };
+  if (c === 1) return { kind: "partly", label: "구름 조금" };
+  if (c === 2) return { kind: "partly", label: "구름 많음" };
+  if (c === 3) return { kind: "cloudy", label: "흐림" };
+  if (c === 45 || c === 48) return { kind: "fog", label: "안개" };
+  if (c >= 51 && c <= 57) return { kind: "rain", label: "이슬비" };
+  if (c >= 61 && c <= 67) return { kind: "rain", label: "비" };
+  if (c >= 71 && c <= 77) return { kind: "snow", label: "눈" };
+  if (c >= 80 && c <= 82) return { kind: "rain", label: "소나기" };
+  if (c === 85 || c === 86) return { kind: "snow", label: "눈" };
+  if (c >= 95) return { kind: "thunder", label: "뇌우" };
+  return { kind: "cloudy", label: "흐림" };
+}
+
+// 바리스 캘린더 문자열 → 같은 아이콘 종류
+const BARIS_WEATHER_KIND = {
+  "맑음": "clear",
+  "구름많음": "partly",
+  "흐림": "cloudy",
+  "비": "rain",
+  "소나기": "rain",
+  "비/눈": "snow",
+  "눈": "snow",
 };
 
-// 맨 위 줄: 오늘 날짜 + 날씨(지점 캘린더에서 받은 값 중 첫 번째)
+let todayWeatherLive = null; // { kind, label, temp }
+
+async function refreshWeather() {
+  try {
+    const r = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${SEOUL.lat}&longitude=${SEOUL.lon}` +
+      `&current=temperature_2m,weather_code&timezone=Asia%2FSeoul`
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const cur = (await r.json())?.current;
+    if (!cur) throw new Error("current 없음");
+    todayWeatherLive = { ...wmoToWeather(cur.weather_code), temp: toFiniteNumber(cur.temperature_2m) };
+  } catch (e) {
+    console.warn("[날씨 조회 실패]", e?.message || e); // 캘린더 값으로 대체된다
+  }
+  renderToday();
+}
+
+/* 손그림 느낌의 작은 날씨 아이콘 — 이모지는 OS마다 모양이 달라 직접 그린다 */
+function weatherIcon(kind) {
+  const sun = `<circle cx="9" cy="9" r="4.2" fill="#FFC53D"/>` +
+    [0, 45, 90, 135, 180, 225, 270, 315]
+      .map((deg) => `<line x1="9" y1="1.6" x2="9" y2="3.4" stroke="#FFC53D" stroke-width="1.6"
+         stroke-linecap="round" transform="rotate(${deg} 9 9)"/>`)
+      .join("");
+  const cloud = (x, y, fill) =>
+    `<path d="M${x + 3} ${y + 9}a3.4 3.4 0 0 1 .4-6.8 5 5 0 0 1 9.4-1.2 3.6 3.6 0 0 1 .6 7.1z"
+       transform="translate(${x - 1} ${y - 1})" fill="${fill}"/>`;
+  const drops = (color) =>
+    [7, 12, 17].map((x, i) =>
+      `<line x1="${x}" y1="${18 + (i % 2)}" x2="${x - 1.6}" y2="${21.5 + (i % 2)}"
+         stroke="${color}" stroke-width="1.8" stroke-linecap="round"/>`).join("");
+  const flakes = (color) =>
+    [7, 12, 17].map((x, i) =>
+      `<circle cx="${x}" cy="${19.5 + (i % 2)}" r="1.3" fill="${color}"/>`).join("");
+
+  const body = {
+    clear: sun,
+    partly: `<g transform="translate(3 -1) scale(0.72)">${sun}</g>${cloud(3, 7, "#C9DDF7")}`,
+    cloudy: `${cloud(1, 4, "#DCE6F2")}${cloud(4, 7, "#C9DDF7")}`,
+    fog: `${cloud(3, 4, "#D6DEE8")}` +
+      [17, 20].map((y) => `<line x1="5" y1="${y}" x2="19" y2="${y}" stroke="#B7C2D0"
+        stroke-width="1.6" stroke-linecap="round"/>`).join(""),
+    rain: `${cloud(3, 4, "#C9DDF7")}${drops("#5B9BF8")}`,
+    snow: `${cloud(3, 4, "#DCE6F2")}${flakes("#7FB4E8")}`,
+    thunder: `${cloud(3, 4, "#B9CBE0")}<path d="M13 16.5l-4 5h3l-1.4 4 4.4-5.6h-3z" fill="#FFC53D"/>`,
+  }[kind] || "";
+
+  return `<svg class="weather-icon" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+}
+
+// 맨 위 줄: 오늘 날짜 + 날씨
 function renderToday() {
   const dateEl = document.getElementById("today-date");
   if (dateEl) {
@@ -566,11 +650,19 @@ function renderToday() {
 
   const wEl = document.getElementById("today-weather");
   if (!wEl) return;
-  const weather = (branchStatusSummary?.branches || [])
-    .map((b) => b.todayWeather)
-    .find(Boolean);
-  wEl.hidden = !weather;
-  if (weather) wEl.textContent = `${WEATHER_ICON[weather] || "🌤️"} ${weather}`;
+
+  let w = todayWeatherLive;
+  if (!w) {
+    // 실시간 조회 실패 시 지점 캘린더가 준 그날의 날씨로 대체
+    const fromBaris = (branchStatusSummary?.branches || []).map((b) => b.todayWeather).find(Boolean);
+    if (fromBaris) w = { kind: BARIS_WEATHER_KIND[fromBaris] || "cloudy", label: fromBaris };
+  }
+
+  wEl.hidden = !w;
+  if (!w) return;
+  wEl.innerHTML =
+    `${weatherIcon(w.kind)}<span class="weather-label">${escapeHtml(w.label)}</span>` +
+    (Number.isFinite(w.temp) ? `<span class="weather-temp">${Math.round(w.temp)}°</span>` : "");
 }
 
 function renderBranchStatus() {
@@ -1422,17 +1514,10 @@ async function barisFetchBranchStatus(token) {
  *   payload.payment       : today_payment(주문건수) / today_produce(제조수량) / today_amount(결제금액)
  *   payload.product_count : orderable(주문가능) / total_sellable(판매상품)
  *
- * 지점 전환 없이 지점ID만 넘기면 되지만, 권한이 현재 지점으로 묶인 계정을 위해
- * 실패하면 지점 전환 토큰으로 한 번 더 시도한다.
+ * 호출 전에 해당 지점으로 전환된 토큰을 넘겨야 한다(refreshBranchStatus 참고).
  */
 async function barisFetchBranchDashboard(branchID, token) {
-  let payload;
-  try {
-    payload = (await barisGet(`/manage/dashboard/main/${branchID}`, token))?.payload;
-  } catch (e) {
-    const branchToken = await barisChangeBranch(branchID, token);
-    payload = (await barisGet(`/manage/dashboard/main/${branchID}`, branchToken))?.payload;
-  }
+  const payload = (await barisGet(`/manage/dashboard/main/${branchID}`, token))?.payload;
   const pay = payload?.payment || {};
   const prod = payload?.product_count || {};
   return {
@@ -2018,7 +2103,8 @@ function init() {
 
   initFilters();
   bindEvents();
-  renderToday(); // 날짜는 로그인 전에도 바로 보인다
+  renderToday();   // 날짜는 로그인 전에도 바로 보인다
+  refreshWeather(); // 날씨는 로그인과 무관하게 바로 받는다
   renderAll();
 
   // 클라우드 공유 데이터를 불러와(최근 저장본 우선) 모든 기기에서 공통 표시
