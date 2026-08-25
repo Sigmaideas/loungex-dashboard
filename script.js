@@ -302,8 +302,6 @@ function getStoreMetrics(store, startYM, endYM) {
   const withCustomersAll = all.filter((m) => (Number(m.customers) || 0) > 0);
   const customersAll = withCustomersAll.reduce((s, m) => s + Number(m.customers), 0);
   const ticketSumAll = withCustomersAll.reduce((s, m) => s + monthTicket(m) * Number(m.customers), 0);
-  const opDaysWithCustomers = withCustomersAll.reduce((s, m) => s + getOperatingDays(store, m), 0);
-  const avgDailyCustomers = opDaysWithCustomers > 0 ? customersAll / opDaysWithCustomers : 0;
   const avgTicket = customersAll > 0 ? ticketSumAll / customersAll : 0;
   const totalRevenueAll = all.reduce((s, m) => s + (m.revenue || 0), 0);
   const totalPayoutAll = all.reduce((s, m) => s + (m.investorPayout || 0), 0);
@@ -388,8 +386,6 @@ function getStoreMetrics(store, startYM, endYM) {
     ticketSumFiltered,
     customersAll,
     ticketSumAll,
-    opDaysWithCustomers,
-    avgDailyCustomers,
     avgTicket,
   };
 }
@@ -1286,7 +1282,7 @@ function getSortedStoreRows(startYM, endYM) {
       case "avgRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
       // 일평균은 월평균을 30으로 나눈 값이라 정렬 순서는 같지만, 컬럼별 정렬 상태 표시를 위해 따로 둔다
       case "avgDailyRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
-      case "avgDailyCustomers": av = a.avgDailyCustomers; bv = b.avgDailyCustomers; break;
+      case "cumulativeCustomers": av = a.customersAll; bv = b.customersAll; break;
       case "avgTicket": av = a.avgTicket; bv = b.avgTicket; break;
       case "monthlyRent": av = a.monthlyRent; bv = b.monthlyRent; break;
       case "monthlyLabor": av = a.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; bv = b.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; break;
@@ -1312,7 +1308,7 @@ const STORE_COLUMNS = [
   { label: "지점명", sort: "name" },
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
-  { label: "평균 일방문객", sort: "avgDailyCustomers", center: true, title: "객수 ÷ 운영일수 (객수가 있는 달 기준)" },
+  { label: "평균 일누적 방문객", sort: "cumulativeCustomers", center: true, title: "오픈 이후 누적 객수 (객수가 입력된 달 기준)" },
   { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
 ];
 
@@ -1347,7 +1343,7 @@ function renderStoreTable(startYM, endYM) {
       <td>${escapeHtml(store.name)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
-      <td class="num center cell-readonly">${m.avgDailyCustomers > 0 ? `${formatNumber(Math.round(m.avgDailyCustomers))}명` : "-"}</td>
+      <td class="num center cell-readonly">${m.customersAll > 0 ? `${formatNumber(m.customersAll)}명` : "-"}</td>
       <td class="num center cell-readonly">${m.avgTicket > 0 ? formatCurrency(m.avgTicket) : "-"}</td>
     </tr>
   `).join("");
@@ -1360,18 +1356,14 @@ function renderStoreTable(startYM, endYM) {
   };
   const meanRevenue = meanOf((r) => r.avgMonthlyRevenue);
   const meanTicket = meanOf((r) => r.avgTicket);
-  // 일방문객만 지점 평균의 평균이 아니라 누적 기준 — 전 지점 누적 방문객 ÷ 전 지점 운영일수.
-  // 운영 기간이 짧은 지점이 실제보다 크게 반영되지 않는다.
-  const customersSum = rows.reduce((acc, r) => acc + r.customersAll, 0);
-  const customerDaysSum = rows.reduce((acc, r) => acc + r.opDaysWithCustomers, 0);
-  const meanDailyCustomers = customerDaysSum > 0 ? customersSum / customerDaysSum : 0;
+  const meanCustomers = meanOf((r) => r.customersAll);
 
   tfoot.innerHTML = `
     <tr>
       <td>매장 평균</td>
       <td class="num center">${formatCurrency(meanRevenue * 0.9)}</td>
       <td class="num center">${formatCurrency(meanRevenue * 0.9 / 30)}</td>
-      <td class="num center">${meanDailyCustomers > 0 ? `${formatNumber(Math.round(meanDailyCustomers))}명` : "-"}</td>
+      <td class="num center">${meanCustomers > 0 ? `${formatNumber(Math.round(meanCustomers))}명` : "-"}</td>
       <td class="num center">${meanTicket > 0 ? formatCurrency(meanTicket) : "-"}</td>
     </tr>
   `;
@@ -1394,23 +1386,6 @@ function updateSortHeaders() {
 function daysInYearMonth(ym) {
   const [y, mo] = ym.split("-").map(Number);
   return new Date(y, mo, 0).getDate();
-}
-
-// 기본 실제 운영일수: 오픈월이면 오픈일~말일, 오픈 전이면 0, 이후면 그 달 전체
-function defaultOperatingDays(store, ym) {
-  const dim = daysInYearMonth(ym);
-  if (!store.openDate) return dim;
-  const openYM = store.openDate.slice(0, 7);
-  if (ym < openYM) return 0;
-  if (ym > openYM) return dim;
-  const openDay = Number(store.openDate.slice(8, 10)) || 1;
-  return Math.max(0, dim - openDay + 1);
-}
-
-// 실제 운영일수: 사용자가 입력한 값(operatingDays)이 있으면 우선, 없으면 기본 계산
-function getOperatingDays(store, m) {
-  if (m.operatingDays != null && m.operatingDays !== "") return Number(m.operatingDays);
-  return defaultOperatingDays(store, m.yearMonth);
 }
 
 /* ============================================================
