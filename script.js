@@ -579,27 +579,6 @@ function renderBranchStatus() {
   document.getElementById("status-operating").textContent = formatNumber(s.operating);
   document.getElementById("status-idle").textContent = formatNumber(s.idle);
 
-  // 주문가능/판매상품 합계 — 지점별 수를 다 받은 뒤에만 표시한다
-  const counted = (s.branches || []).filter(
-    (b) => Number.isFinite(b.orderable) && Number.isFinite(b.sellable)
-  );
-  const orderable = counted.reduce((sum, b) => sum + b.orderable, 0);
-  const sellable = counted.reduce((sum, b) => sum + b.sellable, 0);
-  const menuEl = document.getElementById("status-menu");
-  const sellableEl = document.getElementById("status-menu-sellable");
-  if (menuEl && sellableEl) {
-    const has = counted.length > 0;
-    menuEl.hidden = !has;
-    sellableEl.hidden = !has;
-    if (has) {
-      const orderableEl = document.getElementById("status-orderable");
-      // 품절이 있으면(주문가능 < 판매상품) 타일·툴팁과 같은 빨간 글씨
-      orderableEl.textContent = formatNumber(orderable);
-      orderableEl.parentElement.classList.toggle("short", orderable < sellable);
-      document.getElementById("status-sellable").textContent = formatNumber(sellable);
-    }
-  }
-
   // 지점 하나당 카드 하나 — 지점명 + 바리스 운영관리 페이지의 오늘 지표
   const bars = document.getElementById("status-bars");
   if (!bars) return;
