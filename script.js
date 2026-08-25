@@ -53,6 +53,9 @@ const ui = {
 let revenueChart = null;
 let trendChart = null;
 
+// 지점 운영 현황(바리스 홈과 같은 값). 실시간 상태라 저장하지 않고 화면에서만 쓴다.
+let branchStatusSummary = null;
+
 /* ============================================================
  *  유틸 / 포맷
  * ============================================================ */
@@ -452,6 +455,8 @@ function renderLocked() {
     const el = document.getElementById(id);
     if (el) el.textContent = "";
   });
+  branchStatusSummary = null;
+  renderBranchStatus();
   if (revenueChart) { revenueChart.destroy(); revenueChart = null; }
   if (trendChart) { trendChart.destroy(); trendChart = null; }
   ["chart-revenue-wrap", "chart-trend-wrap"].forEach((id) => {
@@ -515,6 +520,39 @@ function logout() {
 /* ============================================================
  *  KPI
  * ============================================================ */
+/** 바리스에서 지점 운영 상태를 받아 "라운지엑스24h" 지점만 집계 */
+async function refreshBranchStatus() {
+  const token = getBarisToken();
+  if (!token) {
+    branchStatusSummary = null;
+    renderBranchStatus();
+    return;
+  }
+  try {
+    const rows = await barisFetchBranchStatus(token);
+    const mine = rows.filter((r) => r.branchName.includes(BARIS_BRAND_FILTER));
+    const operating = mine.filter((r) => r.status === "OPERATING").length;
+    branchStatusSummary = { total: mine.length, operating, idle: mine.length - operating };
+  } catch {
+    branchStatusSummary = null; // 조회 실패 시 카드 자체를 감춘다(빈 값 표시 방지)
+  }
+  renderBranchStatus();
+}
+
+function renderBranchStatus() {
+  const card = document.getElementById("branch-status-card");
+  if (!card) return;
+  const s = branchStatusSummary;
+  if (!s || s.total === 0) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  document.getElementById("status-total").textContent = `${formatNumber(s.total)}개`;
+  document.getElementById("status-operating").textContent = formatNumber(s.operating);
+  document.getElementById("status-idle").textContent = formatNumber(s.idle);
+}
+
 function renderKPI(startYM, endYM) {
   const totalStores = state.stores.length;
 
@@ -1451,6 +1489,25 @@ async function runWithConcurrency(items, limit, worker) {
 
 const BARIS_BRAND_FILTER = "라운지엑스24h";
 
+/**
+ * 지점 운영 현황 (바리스 홈의 "전체 N대 / 운영중 / 미운영" 과 같은 소스).
+ * GET /home/robots/overview/detail → payload.list[{branch_id, branch_name, status}]
+ */
+async function barisFetchBranchStatus(token) {
+  const j = await barisGet(
+    "/home/robots/overview/detail?page=1&take=100&orderField=branch_name&order=ASC",
+    token
+  );
+  const p = j?.payload || {};
+  const list = Array.isArray(p.list) ? p.list : Array.isArray(p.items) ? p.items : [];
+  return list.map((x) => ({
+    // 바리스 응답에 brnach_id 오타 키가 섞여 있어 둘 다 받는다
+    branchId: x.branch_id || x.brnach_id || "",
+    branchName: x.branch_name || "",
+    status: x.status || "NO_DATA",
+  }));
+}
+
 async function barisFetchOwnBranches(token) {
   const j = await barisGet("/xmanager/branches/own", token);
   return Array.isArray(j?.payload) ? j.payload : [];
@@ -1694,6 +1751,8 @@ async function runBarisImport(importArgs, disableBtns) {
     saveToStorage();
     renderAll();
 
+    refreshBranchStatus();
+
     // 병합 결과를 클라우드에 자동 저장 → 모든 기기 공통
     await cloudSave({ silent: true });
 
@@ -1744,6 +1803,7 @@ async function handleBarisSubmit() {
       setBarisStatus("최신 데이터 불러오는 중...", "");
       await cloudPull();
       refreshAfterDataChange();
+      refreshBranchStatus();
       setBarisStatus("✓ 최신 데이터를 불러왔습니다.", "ok");
       showToast("동기화 완료");
       setTimeout(closeBarisModal, 1000);
@@ -1979,6 +2039,8 @@ function init() {
   renderAll();
 
   // 클라우드 공유 데이터를 불러와(최근 저장본 우선) 모든 기기에서 공통 표시
+  refreshBranchStatus();
+
   cloudPull().then((pulled) => {
     if (pulled) refreshAfterDataChange();
     // 토큰이 없으면(미로그인/만료) 자동으로 로그인 창을 띄워 최신 데이터 동기화 유도

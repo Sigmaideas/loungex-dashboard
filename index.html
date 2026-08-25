@@ -43,6 +43,27 @@
       </div>
     </section>
 
+    <!-- 지점 운영 현황 (바리스 홈과 동일한 표기) -->
+    <section class="card status-card" id="branch-status-card" hidden>
+      <div class="status-box">
+        <div class="status-total">
+          <span class="status-total-label">전체 지점</span>
+          <span class="status-total-value" id="status-total">0개</span>
+        </div>
+        <div class="status-legend">
+          <span class="status-item">
+            <span class="status-swatch operating"></span>
+            <span class="status-item-text">운영중 <span id="status-operating">0</span>개</span>
+          </span>
+          <span class="status-divider"></span>
+          <span class="status-item">
+            <span class="status-swatch idle"></span>
+            <span class="status-item-text">미운영 <span id="status-idle">0</span>개</span>
+          </span>
+        </div>
+      </div>
+    </section>
+
     <!-- KPI -->
     <section class="kpi-grid">
       <div class="card kpi">

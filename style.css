@@ -232,6 +232,64 @@ input, select {
   font-size: 13px;
 }
 
+/* ───────── 지점 운영 현황 (바리스 홈 표기와 동일) ───────── */
+.status-card {
+  padding: clamp(14px, 1.6vw, 20px);
+}
+
+.status-box {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: #fafafa;
+  border: 1px solid #f4f4f5;
+  border-radius: 12px;
+  padding: 16px 24px;
+}
+
+.status-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #191a1c;
+}
+
+.status-total-label { font-size: 20px; font-weight: 500; }
+.status-total-value { font-size: 20px; font-weight: 700; }
+
+.status-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid #9ec5fe;
+  flex-shrink: 0;
+}
+
+.status-swatch.operating { background: #60a5fa; }
+.status-swatch.idle { background: #eef2ff; }
+
+.status-item-text {
+  color: #262626;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ───────── KPI ───────── */
 .kpi-grid {
   display: grid;
