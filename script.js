@@ -51,7 +51,6 @@ const ui = {
 };
 
 let revenueChart = null;
-let profitChart = null;
 let trendChart = null;
 
 /* ============================================================
@@ -451,9 +450,8 @@ function renderLocked() {
     if (el) el.textContent = "";
   });
   if (revenueChart) { revenueChart.destroy(); revenueChart = null; }
-  if (profitChart) { profitChart.destroy(); profitChart = null; }
   if (trendChart) { trendChart.destroy(); trendChart = null; }
-  ["chart-revenue-wrap", "chart-profit-wrap", "chart-trend-wrap"].forEach((id) => {
+  ["chart-revenue-wrap", "chart-trend-wrap"].forEach((id) => {
     const wrap = document.getElementById(id);
     if (wrap) {
       wrap.style.height = "";
@@ -471,7 +469,7 @@ function renderLocked() {
   if (mtf) mtf.innerHTML = "";
   const sel = document.getElementById("monthly-store-select");
   if (sel) sel.innerHTML = "";
-  ["chart-period", "chart-profit-period", "chart-trend-period"].forEach((id) => {
+  ["chart-period", "chart-trend-period"].forEach((id) => {
     const cp = document.getElementById(id);
     if (cp) cp.textContent = "";
   });
@@ -493,7 +491,6 @@ function renderAll() {
 
   renderKPI(startYM, endYM);
   renderChart(startYM, endYM);
-  renderProfitChart(startYM, endYM);
   renderTrendChart(startYM, endYM);
   renderStoreTable(startYM, endYM);
   renderStoreSelect();
@@ -501,11 +498,6 @@ function renderAll() {
 
   document.getElementById("chart-period").textContent =
     state.stores.length === 0 ? "" : `${startYM} ~ ${endYM}`;
-  // 회사 P&L은 지점 상세 표와 동일하게 전체 기간 월평균 기준
-  const profitPeriodEl = document.getElementById("chart-profit-period");
-  if (profitPeriodEl) {
-    profitPeriodEl.textContent = state.stores.length === 0 ? "" : "회사 P&L · 전체 기간 월평균 기준";
-  }
 }
 
 // 로그아웃: 토큰·데이터 삭제 후 잠금 화면
@@ -530,6 +522,9 @@ function renderKPI(startYM, endYM) {
   let totalCompanyPnl = 0;
   let roiSum = 0;
   let roiCount = 0;
+  // 매장 평균 매출: 지점 상세 표의 "월평균 매출"과 같은 기준(전체 기간·VAT 별도)의 매장당 평균
+  let avgMonthlyRevenueSum = 0;
+  let revenueStoreCount = 0;
 
   state.stores.forEach((store) => {
     const m = getStoreMetrics(store, startYM, endYM);
@@ -540,12 +535,20 @@ function renderKPI(startYM, endYM) {
       roiSum += m.roi;
       roiCount++;
     }
+    if (m.totalRevenueAll > 0) {
+      avgMonthlyRevenueSum += m.avgMonthlyRevenue * 0.9;
+      revenueStoreCount++;
+    }
   });
 
   const avgRoi = roiCount > 0 ? roiSum / roiCount : 0;
+  // 매출 데이터가 있는 매장만 분모로 (오픈 예정 지점이 평균을 끌어내리지 않게)
+  const avgStoreRevenue = revenueStoreCount > 0 ? avgMonthlyRevenueSum / revenueStoreCount : 0;
 
   document.getElementById("kpi-stores").textContent = formatNumber(totalStores);
   document.getElementById("kpi-revenue").textContent = formatCurrency(totalRevenue);
+  document.getElementById("kpi-avg-store-revenue").textContent = formatCurrency(avgStoreRevenue);
+  document.getElementById("kpi-avg-daily-revenue").textContent = formatCurrency(avgStoreRevenue / 30);
 
   // 총 투자자 수익: 100% 기준으로 +초과분 / -부족분 표시
   const roiEl = document.getElementById("kpi-roi");
@@ -983,25 +986,6 @@ function renderTrendChart(startYM, endYM) {
   }
 }
 
-// 매장별 순익(회사 P&L) 비중 — 지점 상세 표의 "회사 P&L"과 같은 월평균·전체 기간 기준
-function renderProfitChart(startYM, endYM) {
-  const items = state.stores
-    .map((store) => {
-      const m = getStoreMetrics(store, startYM, endYM);
-      return { name: shortStoreName(store.name), value: m.companyPnl, revenueAll: m.totalRevenueAll };
-    })
-    .filter((x) => x.revenueAll > 0) // 매출 데이터가 없는 지점은 제외
-    .sort((a, b) => b.value - a.value);
-
-  profitChart = renderStackedShareBar({
-    wrapId: "chart-profit-wrap",
-    canvasId: "chart-profit",
-    chart: profitChart,
-    items,
-    emptyText: "선택 기간에 순익 데이터가 없습니다.",
-  });
-}
-
 /* ============================================================
  *  공통: 현재 ui.sortKey/sortDir 기준으로 정렬된 지점 행
  * ============================================================ */
@@ -1022,6 +1006,8 @@ function getSortedStoreRows(startYM, endYM) {
       case "totalPayout": av = a.totalPayoutCalculated; bv = b.totalPayoutCalculated; break;
       case "recoveryRate": av = a.recoveryRate; bv = b.recoveryRate; break;
       case "avgRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
+      // 일평균은 월평균을 30으로 나눈 값이라 정렬 순서는 같지만, 컬럼별 정렬 상태 표시를 위해 따로 둔다
+      case "avgDailyRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
       case "monthlyRent": av = a.monthlyRent; bv = b.monthlyRent; break;
       case "monthlyLabor": av = a.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; bv = b.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; break;
       case "materialCost": av = a.materialCost; bv = b.materialCost; break;
@@ -1050,6 +1036,7 @@ const STORE_COLUMNS = [
   { label: "총 회수금액", sort: "totalPayout", center: true },
   { label: "회수율", sort: "recoveryRate", center: true },
   { label: "월평균 매출", sort: "avgRevenue", center: true },
+  { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
   { label: "월평균 회수금액", sort: "avgPayout", center: true },
   { label: "수익률", sort: "roi" },
   { label: "월 임대료", sort: "monthlyRent", center: true, title: "더블클릭 후 금액(3000000) 또는 매출 비율(10%)을 입력하세요" },
@@ -1100,6 +1087,7 @@ function renderStoreTable(startYM, endYM) {
       <td class="num center cell-readonly">${formatCurrency(m.totalPayoutCalculated)}</td>
       <td class="num center cell-readonly">${renderRecoveryBar(m.recoveryRate, (store.totalInvestment || 0) > 0)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
+      <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
       <td class="num center cell-readonly ${m.avgMonthlyPayout >= m.minMonthlyPayout && m.minMonthlyPayout > 0 ? "pos" : ""}">${formatCurrency(m.avgMonthlyPayout)}</td>
       <td class="num cell-readonly ${formatRoiDisplay(m.roi, m.minMonthlyPayout).cls}">${formatRoiDisplay(m.roi, m.minMonthlyPayout).text}</td>
       <td class="num center"><span class="cell-editable" data-edit="store" data-field="monthlyRent" data-id="${store.id}" data-input-type="rent" title="금액(예: 3000000) 또는 매출 비율(예: 10%)을 입력하세요">${renderRentCell(store, m.monthlyRent)}</span></td>
@@ -1150,6 +1138,7 @@ function renderStoreTable(startYM, endYM) {
       <td class="num center">${formatCurrency(sum.totalPayout)}</td>
       <td class="num center">${renderRecoveryBar(sum.investment > 0 ? sum.totalPayout / sum.investment : 0, sum.investment > 0)}</td>
       <td class="num center">${formatCurrency(avgRevenueAll * 0.9)}</td>
+      <td class="num center">${formatCurrency(avgRevenueAll * 0.9 / 30)}</td>
       <td class="num center ${avgPayoutAll >= sum.minPayout / Math.max(rows.length, 1) ? "pos" : ""}">${formatCurrency(avgPayoutAll)}</td>
       <td class="num ${formatRoiDisplay(avgRoi, aggregateMinPayout).cls}">${formatRoiDisplay(avgRoi, aggregateMinPayout).text}</td>
       <td class="num center">${formatCurrency(sum.monthlyRent)}</td>
