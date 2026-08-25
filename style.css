@@ -296,50 +296,100 @@ input, select {
   font-variant-numeric: tabular-nums;
 }
 
-/* 지점 하나당 사각형 하나 — 바리스는 25칸 그리드에 정사각 타일 */
+/* 품절이 있으면 타일·툴팁과 같은 빨간 글씨 */
+.status-item-text.short { color: var(--danger); }
+
+/* 지점 하나당 카드 하나 — 바리스 운영관리 페이지의 오늘 지표를 그대로 담는다 */
 .status-bars {
   display: grid;
-  grid-template-columns: repeat(25, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
   margin-top: 12px;
-  padding: 12px;
-  background: #ffffff;
+}
+
+.branch-card {
+  padding: 16px 18px;
+  border: 1px solid #e8e9ea;
   border-radius: 12px;
-}
-
-.status-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  border-radius: 6px;
-  border: 1px solid #9ec5fe;
+  background: #ffffff;
   box-sizing: border-box;
-  /* 타일 안의 주문가능 수 */
-  color: #ffffff;
-  font-size: 13px;
+}
+
+.branch-card:not(.nodata) { cursor: pointer; }
+
+/* 상태는 카드 왼쪽 색 띠로 — 타일 색과 같은 계열 */
+.branch-card.operating { border-left: 4px solid #68adfe; }
+.branch-card.idle { border-left: 4px solid #e0eeff; }
+.branch-card.nodata { border-left: 4px solid #f0f1f2; background: #fbfbfc; }
+
+.branch-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.branch-card-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #17191c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-card-status {
+  font-size: 12px;
+  font-weight: 500;
+  color: #8c919b;
+  white-space: nowrap;
+}
+.branch-card.operating .branch-card-status { color: #296ff7; }
+
+.branch-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+
+.branch-metric { min-width: 0; }
+
+.branch-metric-label {
+  font-size: 12px;
+  font-weight: 400;
+  color: #8c919b;
+  line-height: 16px;
+}
+
+.branch-metric-value {
+  margin-top: 2px;
+  font-size: 20px;
   font-weight: 600;
+  color: #17191c;
+  line-height: 28px;
   font-variant-numeric: tabular-nums;
-  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* 주문가능 < 판매상품 → 품절이 있다는 뜻이라 빨간 글씨 */
-.status-bar.short { color: var(--danger); }
+/* 판매상품 수·빈 값처럼 보조가 되는 숫자 */
+.branch-metric-sub { color: #787e87; }
 
-/* 연한 배경 타일에서는 흰 글씨가 안 보이므로 기본 글자색을 어둡게 */
-.status-bar.idle:not(.short),
-.status-bar.nodata:not(.short) { color: #4b5059; }
-
-.status-bar.operating { background: #68adfe; }
-.status-bar.idle { background: #e0eeff; }
-.status-bar.nodata { background: #f8f9fa; border: none; }
-
-@media (max-width: 760px) {
-  .status-bars { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+.branch-metric-unit {
+  margin-left: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #787e87;
 }
 
-.status-bar:not(.nodata) { cursor: pointer; }
+/* 주문가능 < 판매상품 → 품절이 있다는 뜻 */
+.branch-metric-value .short { color: var(--danger); }
+
+@media (max-width: 520px) {
+  .status-bars { grid-template-columns: 1fr; }
+}
 
 /* 타일 툴팁 — 바리스 홈 툴팁(흰 카드 + 아래쪽 화살표)과 같은 구성 */
 .status-tooltip {
@@ -399,7 +449,7 @@ input, select {
 
 /* 카드 5개 — 넓은 화면에서는 한 줄로 */
 @media (min-width: 1040px) {
-  .kpi-grid { grid-template-columns: repeat(5, 1fr); }
+  .kpi-grid { grid-template-columns: repeat(4, 1fr); }
 }
 
 .kpi {

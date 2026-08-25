@@ -447,11 +447,11 @@ function updateLoginButton() {
 
 // 로그아웃 상태(토큰 없음)에서 보여줄 잠금 화면 — 데이터 숨김
 function renderLocked() {
-  ["kpi-stores", "kpi-revenue", "kpi-avg-store-revenue", "kpi-avg-daily-revenue", "kpi-avg-ticket"].forEach((id) => {
+  ["kpi-revenue", "kpi-avg-store-revenue", "kpi-avg-daily-revenue", "kpi-avg-ticket"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.textContent = "-";
   });
-  ["kpi-stores-sub", "kpi-avg-ticket-sub"].forEach((id) => {
+  ["kpi-avg-ticket-sub"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.textContent = "";
   });
@@ -542,17 +542,25 @@ async function refreshBranchStatus() {
     };
     renderBranchStatus(); // 상태 타일을 먼저 그리고, 주문가능 수는 받는 대로 채운다
 
-    // 지점별 주문가능/판매상품 — 지점 전환이 필요해 지점 수만큼 호출된다
+    // 지점별 오늘 실적/상품 수 — 바리스 운영관리 페이지와 같은 소스
+    const detailErrors = [];
     await runWithConcurrency(mine, 4, async (b) => {
-      if (!b.branchId) return;
+      if (!b.branchId) {
+        detailErrors.push(`${b.branchName}: branchId 없음`);
+        return;
+      }
       try {
-        const branchToken = await barisChangeBranch(b.branchId, token);
-        Object.assign(b, await barisFetchMenuCounts(b.branchId, branchToken));
-      } catch {
-        // 실패한 지점은 숫자 없이 타일만 표시
+        Object.assign(b, await barisFetchBranchDashboard(b.branchId, token));
+      } catch (e) {
+        detailErrors.push(`${b.branchName}: ${e.message}`);
       }
     });
-  } catch {
+    const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
+    if (detailErrors.length) console.warn("[지점 상세 조회 실패]", detailErrors);
+    // 전 지점 실패면 숫자가 하나도 안 나오므로 원인을 화면에도 알린다
+    if (ok === 0 && detailErrors.length) showToast(`지점 상세 조회 실패 — ${detailErrors[0]}`);
+  } catch (e) {
+    console.warn("[지점 운영 현황 조회 실패]", e?.message || e);
     branchStatusSummary = null; // 조회 실패 시 카드 자체를 감춘다(빈 값 표시 방지)
   }
   renderBranchStatus();
@@ -571,18 +579,72 @@ function renderBranchStatus() {
   document.getElementById("status-operating").textContent = formatNumber(s.operating);
   document.getElementById("status-idle").textContent = formatNumber(s.idle);
 
-  // 지점 하나당 사각형 하나 — 바리스 홈의 로봇 타일과 같은 표기
+  // 주문가능/판매상품 합계 — 지점별 수를 다 받은 뒤에만 표시한다
+  const counted = (s.branches || []).filter(
+    (b) => Number.isFinite(b.orderable) && Number.isFinite(b.sellable)
+  );
+  const orderable = counted.reduce((sum, b) => sum + b.orderable, 0);
+  const sellable = counted.reduce((sum, b) => sum + b.sellable, 0);
+  const menuEl = document.getElementById("status-menu");
+  const sellableEl = document.getElementById("status-menu-sellable");
+  if (menuEl && sellableEl) {
+    const has = counted.length > 0;
+    menuEl.hidden = !has;
+    sellableEl.hidden = !has;
+    if (has) {
+      const orderableEl = document.getElementById("status-orderable");
+      // 품절이 있으면(주문가능 < 판매상품) 타일·툴팁과 같은 빨간 글씨
+      orderableEl.textContent = formatNumber(orderable);
+      orderableEl.parentElement.classList.toggle("short", orderable < sellable);
+      document.getElementById("status-sellable").textContent = formatNumber(sellable);
+    }
+  }
+
+  // 지점 하나당 카드 하나 — 지점명 + 바리스 운영관리 페이지의 오늘 지표
   const bars = document.getElementById("status-bars");
   if (!bars) return;
   bars.innerHTML = (s.branches || []).map((b, i) => {
     const cls = b.status === "OPERATING" ? "operating" : b.status === "NO_DATA" ? "nodata" : "idle";
-    // 주문가능 수 — 판매상품 수보다 적으면(품절 있음) 빨간 글씨
+    const label = b.status === "OPERATING" ? "운영중" : b.status === "NO_DATA" ? "데이터 없음" : "미운영";
     const hasCount = Number.isFinite(b.orderable) && Number.isFinite(b.sellable);
-    const short = hasCount && b.orderable < b.sellable ? " short" : "";
-    const text = hasCount ? formatNumber(b.orderable) : "";
-    return `<div class="status-bar ${cls}${short}" data-branch-index="${i}">${text}</div>`;
+    return `
+      <div class="branch-card ${cls}" data-branch-index="${i}">
+        <div class="branch-card-head">
+          <span class="branch-card-name">${escapeHtml(shortStoreName(b.branchName))}</span>
+          <span class="branch-card-status">${label}</span>
+        </div>
+        <div class="branch-card-metrics">
+          ${metricCell("오늘 주문 건수", b.todayOrders, "건")}
+          ${metricCell("오늘 음료 제조 수량", b.todayProduced, "개")}
+          ${metricCell("오늘 결제금액", b.todayAmount, "원")}
+          <div class="branch-metric">
+            <div class="branch-metric-label">주문 가능 / 판매 상품</div>
+            <div class="branch-metric-value">
+              ${hasCount
+                ? `<span class="${b.orderable < b.sellable ? "short" : ""}">${formatNumber(b.orderable)}</span>` +
+                  `<span class="branch-metric-sub"> / ${formatNumber(b.sellable)}</span>` +
+                  `<span class="branch-metric-unit">개</span>`
+                : `<span class="branch-metric-sub">-</span>`}
+            </div>
+          </div>
+        </div>
+      </div>`;
   }).join("");
   hideBranchTooltip();
+}
+
+// 카드 안의 지표 한 칸 — 값이 아직 없으면 "-"
+function metricCell(label, value, unit) {
+  const has = Number.isFinite(value);
+  return `
+    <div class="branch-metric">
+      <div class="branch-metric-label">${label}</div>
+      <div class="branch-metric-value">${
+        has
+          ? `${formatNumber(value)}<span class="branch-metric-unit">${unit}</span>`
+          : `<span class="branch-metric-sub">-</span>`
+      }</div>
+    </div>`;
 }
 
 /* ── 타일 hover 툴팁 — 바리스 홈의 툴팁 내용을 그대로 옮긴 것 ──
@@ -600,11 +662,6 @@ function showBranchTooltip(tile) {
     <div class="tip-sep"></div>
     <div class="tip-row"><span>운영중</span><span>${formatMinutes(b.runTime)}</span></div>
     <div class="tip-row"><span>미운영</span><span>${formatMinutes(b.downTime)}</span></div>
-    ${Number.isFinite(b.orderable) && Number.isFinite(b.sellable) ? `
-      <div class="tip-sep"></div>
-      <div class="tip-row"><span>주문가능</span><span class="${b.orderable < b.sellable ? "tip-short" : ""}">${formatNumber(b.orderable)}</span></div>
-      <div class="tip-row"><span>판매상품</span><span>${formatNumber(b.sellable)}</span></div>
-    ` : ""}
   `;
   tip.hidden = false;
 
@@ -635,8 +692,6 @@ function formatMinutes(min) {
 }
 
 function renderKPI(startYM, endYM) {
-  const totalStores = state.stores.length;
-
   let totalRevenue = 0;
   let totalCustomers = 0;
   let totalTicketSum = 0;
@@ -658,7 +713,6 @@ function renderKPI(startYM, endYM) {
   // 선택 기간에 매출이 있는 매장만 분모로 (오픈 전 지점이 평균을 끌어내리지 않게)
   const avgStoreRevenue = revenueStoreCount > 0 ? avgMonthlyRevenueSum / revenueStoreCount : 0;
 
-  document.getElementById("kpi-stores").textContent = formatNumber(totalStores);
   document.getElementById("kpi-revenue").textContent = formatCurrency(totalRevenue);
   document.getElementById("kpi-avg-store-revenue").textContent = formatCurrency(avgStoreRevenue);
   document.getElementById("kpi-avg-daily-revenue").textContent = formatCurrency(avgStoreRevenue / 30);
@@ -1593,18 +1647,31 @@ async function barisFetchBranchStatus(token) {
 }
 
 /**
- * 지점의 주문가능/판매상품 수 (바리스 판매상품관리와 같은 소스).
- * GET /manage/menu/list/{branchID}?cate_cd=ALL → payload.list[{active_yn, soldout_yn}]
- *   판매상품 = 판매(활성) 상품, 주문가능 = 그중 품절이 아닌 상품
- *   (품절 상품은 키오스크에 보이지만 선택할 수 없다 = 주문 불가)
+ * 지점 한 곳의 오늘 실적 + 상품 수 (바리스 "운영관리" 페이지와 같은 소스).
+ * GET /manage/dashboard/main/{branchID}
+ *   payload.payment       : today_payment(주문건수) / today_produce(제조수량) / today_amount(결제금액)
+ *   payload.product_count : orderable(주문가능) / total_sellable(판매상품)
+ *
+ * 지점 전환 없이 지점ID만 넘기면 되지만, 권한이 현재 지점으로 묶인 계정을 위해
+ * 실패하면 지점 전환 토큰으로 한 번 더 시도한다.
  */
-async function barisFetchMenuCounts(branchID, token) {
-  const j = await barisGet(`/manage/menu/list/${branchID}?page=1&cate_cd=ALL&take=500`, token);
-  const list = Array.isArray(j?.payload?.list) ? j.payload.list : [];
-  const active = list.filter((m) => Number(m.active_yn) === 1);
+async function barisFetchBranchDashboard(branchID, token) {
+  let payload;
+  try {
+    payload = (await barisGet(`/manage/dashboard/main/${branchID}`, token))?.payload;
+  } catch (e) {
+    const branchToken = await barisChangeBranch(branchID, token);
+    payload = (await barisGet(`/manage/dashboard/main/${branchID}`, branchToken))?.payload;
+  }
+  const pay = payload?.payment || {};
+  const prod = payload?.product_count || {};
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined);
   return {
-    sellable: active.length,
-    orderable: active.filter((m) => !Number(m.soldout_yn)).length,
+    todayOrders: num(pay.today_payment),
+    todayProduced: num(pay.today_produce),
+    todayAmount: num(pay.today_amount),
+    orderable: num(prod.orderable),
+    sellable: num(prod.total_sellable),
   };
 }
 
@@ -2045,13 +2112,13 @@ function bindEvents() {
   const barsEl = document.getElementById("status-bars");
   if (barsEl) {
     barsEl.addEventListener("mouseover", (e) => {
-      const tile = e.target.closest(".status-bar");
+      const tile = e.target.closest(".branch-card");
       if (tile) showBranchTooltip(tile);
     });
     barsEl.addEventListener("mouseout", (e) => {
-      const tile = e.target.closest(".status-bar");
+      const tile = e.target.closest(".branch-card");
       if (tile && !barsEl.contains(e.relatedTarget)) hideBranchTooltip();
-      else if (tile && e.relatedTarget?.closest?.(".status-bar") !== tile) hideBranchTooltip();
+      else if (tile && e.relatedTarget?.closest?.(".branch-card") !== tile) hideBranchTooltip();
     });
     barsEl.addEventListener("mouseleave", hideBranchTooltip);
   }
