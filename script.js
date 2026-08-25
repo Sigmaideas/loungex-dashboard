@@ -536,7 +536,20 @@ async function refreshBranchStatus() {
       } catch (e) {
         detailErrors.push(`${b.branchName}: 일별 실적 (${e.message})`);
       }
+      try {
+        Object.assign(b, await barisFetchPayTypes(b.branchId, branchToken));
+      } catch (e) {
+        detailErrors.push(`${b.branchName}: 결제수단 (${e.message})`);
+      }
     });
+    // 현장/앱 어느 쪽으로도 분류되지 않은 결제수단은 비율에서 빠지므로 눈에 띄게 남긴다
+    const payTypeNames = [...new Set(mine.flatMap((b) => (b.payTypes || []).map((p) => p.name)))];
+    if (payTypeNames.length) console.info("[결제수단 종류]", payTypeNames.join(", "));
+    const unmapped = payTypeNames.filter(
+      (n) => !ONSITE_PAY.test(n) && !APP_PAY.test(n) && !EXCLUDED_PAY.test(n)
+    );
+    if (unmapped.length) console.warn("[현장/앱 미분류 결제수단]", unmapped.join(", "));
+
     const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
     const graphed = mine.filter((b) => (b.series || []).length > 0).length;
     if (detailErrors.length) console.warn("[지점 상세 조회 실패]", detailErrors);
@@ -549,6 +562,8 @@ async function refreshBranchStatus() {
     branchStatusSummary = null; // 조회 실패 시 카드 자체를 감춘다(빈 값 표시 방지)
   }
   renderBranchStatus();
+  // 지점 상세의 "현장 : 앱" 열은 방금 받은 결제수단을 쓰므로 함께 다시 그린다
+  if (state.stores.length > 0) renderStoreTable(ui.filterStart, ui.filterEnd);
 }
 
 /* ── 오늘 날씨 ──────────────────────────────────────────────
@@ -1284,6 +1299,8 @@ function getSortedStoreRows(startYM, endYM) {
       case "avgDailyRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
       case "cumulativeCustomers": av = a.customersAll; bv = b.customersAll; break;
       case "avgTicket": av = a.avgTicket; bv = b.avgTicket; break;
+      case "appRatio": av = payChannelSplit(branchPayTypes(a.store))?.appPct ?? -1;
+                       bv = payChannelSplit(branchPayTypes(b.store))?.appPct ?? -1; break;
       case "monthlyRent": av = a.monthlyRent; bv = b.monthlyRent; break;
       case "monthlyLabor": av = a.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; bv = b.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; break;
       case "materialCost": av = a.materialCost; bv = b.materialCost; break;
@@ -1310,7 +1327,24 @@ const STORE_COLUMNS = [
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
   { label: "평균 일누적 방문객", sort: "cumulativeCustomers", center: true, title: "오픈 이후 누적 객수 (객수가 입력된 달 기준)" },
   { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
+  { label: "현장 : 앱", sort: "appRatio", center: true, title: "누적 결제 건수 기준 · 결제수단으로 구분(카드·현금=현장, 간편결제=앱)" },
 ];
+
+// 지점 상세(로컬 매출 데이터)와 바리스 실시간 상태를 지점ID로 잇는다. 없으면 지점명으로.
+function branchPayTypes(store) {
+  const list = branchStatusSummary?.branches || [];
+  const hit = list.find((b) => b.branchId === store.id) ||
+    list.find((b) => b.branchName === store.name);
+  return hit?.payTypes;
+}
+
+// "62 : 38" — 앞이 현장, 뒤가 앱
+function channelCell(split) {
+  if (!split) return "-";
+  return `<span class="channel-onsite">${Math.round(split.onsitePct)}</span>` +
+    `<span class="channel-sep"> : </span>` +
+    `<span class="channel-app">${Math.round(split.appPct)}</span>`;
+}
 
 function renderStoreHead() {
   const thead = document.getElementById("store-thead");
@@ -1345,6 +1379,7 @@ function renderStoreTable(startYM, endYM) {
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
       <td class="num center cell-readonly">${m.customersAll > 0 ? `${formatNumber(m.customersAll)}명` : "-"}</td>
       <td class="num center cell-readonly">${m.avgTicket > 0 ? formatCurrency(m.avgTicket) : "-"}</td>
+      <td class="num center cell-readonly">${channelCell(payChannelSplit(branchPayTypes(store)))}</td>
     </tr>
   `).join("");
 
@@ -1365,6 +1400,9 @@ function renderStoreTable(startYM, endYM) {
       <td class="num center">${formatCurrency(meanRevenue * 0.9 / 30)}</td>
       <td class="num center">${meanCustomers > 0 ? `${formatNumber(Math.round(meanCustomers))}명` : "-"}</td>
       <td class="num center">${meanTicket > 0 ? formatCurrency(meanTicket) : "-"}</td>
+      <td class="num center">${channelCell(payChannelSplit(
+        rows.flatMap((r) => branchPayTypes(r.store) || [])
+      ))}</td>
     </tr>
   `;
 
@@ -1604,6 +1642,51 @@ function monthOverMonthChange(lastDays, curDays, now) {
   const daysThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const projected = (sum(done) / done.length) * daysThisMonth;
   return ((projected - lastTotal) / lastTotal) * 100;
+}
+
+/**
+ * 지점 한 곳의 누적 결제수단 구성 (바리스 매출분석 화면과 같은 소스).
+ * GET /analysis/sales/graph/{branchID}?tab_cd=ALL
+ *   payload.sales_pay_type[{ pay_type: "카드결제"…, count, tot_sell_amt }]
+ *
+ * 바리스는 주문 경로(앱/현장)를 따로 주지 않아 결제수단으로 갈음한다.
+ * 어떤 수단이 앱 결제인지는 실제 응답 문자열을 보고 확정해야 하므로,
+ * 여기서는 받은 그대로 보여주고 문자열을 콘솔에 남긴다.
+ */
+async function barisFetchPayTypes(branchID, token) {
+  const j = await barisGet(`/analysis/sales/graph/${branchID}?tab_cd=ALL`, token);
+  const list = Array.isArray(j?.payload?.sales_pay_type) ? j.payload.sales_pay_type : [];
+  const payTypes = list
+    .map((r) => ({
+      name: String(r.pay_type || "").trim(),
+      count: toFiniteNumber(r.count) ?? 0,
+      amount: toFiniteNumber(r.tot_sell_amt) ?? 0,
+    }))
+    .filter((r) => r.name && r.count > 0)
+    .sort((a, b) => b.count - a.count);
+  return { payTypes };
+}
+
+/* 결제수단 문자열 → 현장(키오스크) / 앱.
+   바리스는 주문 경로를 따로 주지 않아 결제수단으로 갈음한다.
+   여기 없는 문자열은 "기타"로 빠지고 콘솔에 남으니, 실제 값을 보고 채워 넣으면 된다. */
+const ONSITE_PAY = /카드|현금|신용|체크|키오스크|현장/;
+const APP_PAY = /앱|어플|모바일|카카오|네이버|페이코|토스|간편|엑스\s*페이|x\s*(pay|페이)/i;
+// 매출로 볼 수 없는 건들(재제조·무료·시연·테스트)은 비율에서 뺀다
+const EXCLUDED_PAY = /재제조|무료|시연|테스트|면접/;
+
+function payChannelSplit(payTypes) {
+  if (!Array.isArray(payTypes) || payTypes.length === 0) return null;
+  let onsite = 0, app = 0, other = 0;
+  for (const p of payTypes) {
+    if (EXCLUDED_PAY.test(p.name)) continue;
+    if (ONSITE_PAY.test(p.name)) onsite += p.count;
+    else if (APP_PAY.test(p.name)) app += p.count;
+    else other += p.count;
+  }
+  const total = onsite + app;
+  if (total === 0) return null;
+  return { onsite, app, other, onsitePct: (onsite / total) * 100, appPct: (app / total) * 100 };
 }
 
 async function barisFetchOwnBranches(token) {
