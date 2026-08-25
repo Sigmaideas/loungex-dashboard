@@ -326,6 +326,10 @@ function getStoreMetrics(store, startYM, endYM) {
   const filtered = all.filter((m) => inRange(m.yearMonth, startYM, endYM));
 
   const totalRevenue = filtered.reduce((s, m) => s + (m.revenue || 0), 0);
+  // 객수: 입력된 달만 합산. 객단가는 "객수가 있는 달의 매출"로만 나눠야 하므로 짝이 되는 매출도 함께 모은다
+  const withCustomers = filtered.filter((m) => (Number(m.customers) || 0) > 0);
+  const customersFiltered = withCustomers.reduce((s, m) => s + Number(m.customers), 0);
+  const revenueWithCustomersFiltered = withCustomers.reduce((s, m) => s + (m.revenue || 0), 0);
   const totalRevenueAll = all.reduce((s, m) => s + (m.revenue || 0), 0);
   const totalPayoutAll = all.reduce((s, m) => s + (m.investorPayout || 0), 0);
   const totalPayoutFiltered = filtered.reduce((s, m) => s + (m.investorPayout || 0), 0);
@@ -403,6 +407,10 @@ function getStoreMetrics(store, startYM, endYM) {
     monthlyRentFiltered,
     roiFiltered,
     companyPnlFiltered,
+    avgMonthlyRevenueFiltered,
+    filteredOpDays,
+    customersFiltered,
+    revenueWithCustomersFiltered,
   };
 }
 
@@ -441,11 +449,11 @@ function updateLoginButton() {
 
 // 로그아웃 상태(토큰 없음)에서 보여줄 잠금 화면 — 데이터 숨김
 function renderLocked() {
-  ["kpi-roi", "kpi-company", "kpi-stores", "kpi-revenue"].forEach((id) => {
+  ["kpi-stores", "kpi-revenue", "kpi-avg-store-revenue", "kpi-avg-daily-revenue", "kpi-avg-ticket"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.textContent = "-";
   });
-  ["kpi-roi-sub", "kpi-company-sub", "kpi-stores-sub", "kpi-revenue-sub"].forEach((id) => {
+  ["kpi-stores-sub", "kpi-avg-ticket-sub"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.textContent = "";
   });
@@ -464,7 +472,7 @@ function renderLocked() {
   const stf = document.getElementById("store-tfoot");
   if (stf) stf.innerHTML = "";
   const mtb = document.getElementById("monthly-tbody");
-  if (mtb) mtb.innerHTML = '<tr><td colspan="7" class="empty-state">로그인이 필요합니다.</td></tr>';
+  if (mtb) mtb.innerHTML = '<tr><td colspan="8" class="empty-state">로그인이 필요합니다.</td></tr>';
   const mtf = document.getElementById("monthly-tfoot");
   if (mtf) mtf.innerHTML = "";
   const sel = document.getElementById("monthly-store-select");
@@ -519,30 +527,24 @@ function renderKPI(startYM, endYM) {
   const totalStores = state.stores.length;
 
   let totalRevenue = 0;
-  let totalCompanyPnl = 0;
-  let roiSum = 0;
-  let roiCount = 0;
-  // 매장 평균 매출: 지점 상세 표의 "월평균 매출"과 같은 기준(전체 기간·VAT 별도)의 매장당 평균
+  let totalCustomers = 0;
+  let totalRevenueWithCustomers = 0;
+  // 평균 월매출: 매출이 있는 매장의 "선택 기간 월평균 매출"을 매장 수로 나눈 값
   let avgMonthlyRevenueSum = 0;
   let revenueStoreCount = 0;
 
   state.stores.forEach((store) => {
     const m = getStoreMetrics(store, startYM, endYM);
     totalRevenue += m.totalRevenue;
-    // 총 회사 수익, 평균 수익률은 기간 필터와 무관하게 전체 기간 기준
-    totalCompanyPnl += m.companyPnl;
-    if ((store.totalInvestment || 0) > 0) {
-      roiSum += m.roi;
-      roiCount++;
-    }
-    if (m.totalRevenueAll > 0) {
-      avgMonthlyRevenueSum += m.avgMonthlyRevenue * 0.9;
+    totalCustomers += m.customersFiltered;
+    totalRevenueWithCustomers += m.revenueWithCustomersFiltered;
+    if (m.totalRevenue > 0) {
+      avgMonthlyRevenueSum += m.avgMonthlyRevenueFiltered;
       revenueStoreCount++;
     }
   });
 
-  const avgRoi = roiCount > 0 ? roiSum / roiCount : 0;
-  // 매출 데이터가 있는 매장만 분모로 (오픈 예정 지점이 평균을 끌어내리지 않게)
+  // 선택 기간에 매출이 있는 매장만 분모로 (오픈 전 지점이 평균을 끌어내리지 않게)
   const avgStoreRevenue = revenueStoreCount > 0 ? avgMonthlyRevenueSum / revenueStoreCount : 0;
 
   document.getElementById("kpi-stores").textContent = formatNumber(totalStores);
@@ -550,22 +552,21 @@ function renderKPI(startYM, endYM) {
   document.getElementById("kpi-avg-store-revenue").textContent = formatCurrency(avgStoreRevenue);
   document.getElementById("kpi-avg-daily-revenue").textContent = formatCurrency(avgStoreRevenue / 30);
 
-  // 총 투자자 수익: 100% 기준으로 +초과분 / -부족분 표시
-  const roiEl = document.getElementById("kpi-roi");
-  if (roiCount === 0) {
-    roiEl.textContent = "-";
-    roiEl.classList.remove("pos", "neg");
+  // 평균 객단가 = 매출 / 객수. 객수는 월별 실적에 입력된 값만 사용하므로,
+  // 값이 없으면 억지로 계산하지 않고 "-" 로 둔다.
+  const ticketEl = document.getElementById("kpi-avg-ticket");
+  const ticketSubEl = document.getElementById("kpi-avg-ticket-sub");
+  if (totalCustomers > 0) {
+    ticketEl.textContent = formatCurrency(totalRevenueWithCustomers / totalCustomers);
+    // 객수가 일부 달/지점에만 있으면 그만큼의 매출만 쓴 값이라는 것을 밝혀둔다
+    const partial = totalRevenueWithCustomers < totalRevenue;
+    ticketSubEl.textContent = partial
+      ? `객수 입력분만 · ${formatNumber(totalCustomers)}명`
+      : `선택 기간 · 객수 ${formatNumber(totalCustomers)}명`;
   } else {
-    const d = formatRoiDisplay(avgRoi, 1);
-    roiEl.textContent = d.text;
-    roiEl.classList.remove("pos", "neg");
-    if (d.cls) roiEl.classList.add(d.cls);
+    ticketEl.textContent = "-";
+    ticketSubEl.textContent = "월별 실적에 객수를 입력하면 표시됩니다";
   }
-
-  // 총 회사 수익: 음수면 빨간색
-  const companyEl = document.getElementById("kpi-company");
-  companyEl.textContent = formatCurrency(totalCompanyPnl);
-  companyEl.classList.toggle("neg", totalCompanyPnl < 0);
 }
 
 /* ============================================================
@@ -1216,14 +1217,14 @@ function renderMonthlyTable() {
 
   const store = state.stores.find((s) => s.id === ui.selectedStoreId);
   if (!store) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">먼저 지점을 추가하세요.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">먼저 지점을 추가하세요.</td></tr>';
     tfoot.innerHTML = "";
     return;
   }
 
   const rows = getMonthlyForStore(store.id);
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">해당 지점의 월별 실적이 없습니다. "+ 월 추가" 버튼으로 시작하세요.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">해당 지점의 월별 실적이 없습니다. "+ 월 추가" 버튼으로 시작하세요.</td></tr>';
     tfoot.innerHTML = "";
     return;
   }
@@ -1241,6 +1242,7 @@ function renderMonthlyTable() {
         <td class="num cell-readonly">${monthDays}일</td>
         <td class="num"><span class="cell-editable" data-edit="monthly" data-field="operatingDays" data-store-id="${store.id}" data-key="${m.yearMonth}" data-input-type="number">${opDays}</span>일</td>
         <td class="num"><span class="cell-editable" data-edit="monthly" data-field="revenue" data-store-id="${store.id}" data-key="${m.yearMonth}" data-input-type="number">${formatCurrency(m.revenue)}</span></td>
+        <td class="num"><span class="cell-editable" data-edit="monthly" data-field="customers" data-store-id="${store.id}" data-key="${m.yearMonth}" data-input-type="number">${m.customers ? formatNumber(m.customers) : "-"}</span></td>
         <td class="num cell-readonly">${formatCurrency(payout)}</td>
         <td class="num cell-readonly accent" style="color: var(--accent);">${formatCurrency(opProfit)}</td>
         <td class="col-action">
@@ -1251,6 +1253,7 @@ function renderMonthlyTable() {
   }).join("");
 
   const totalRev = rows.reduce((s, m) => s + (m.revenue || 0), 0);
+  const totalCustomers = rows.reduce((s, m) => s + (Number(m.customers) || 0), 0);
   const totalPayout = totalRev * 0.9 * 0.2; // 회수금 = 매출 × 90% × 회수비율(20%)
   const totalOp = totalRev * 0.9 * 0.1;     // 운영수익 = 매출 × 90% × 10%
 
@@ -1260,6 +1263,7 @@ function renderMonthlyTable() {
       <td></td>
       <td class="num">${totalOpDays}일</td>
       <td class="num">${formatCurrency(totalRev)}</td>
+      <td class="num">${totalCustomers > 0 ? formatNumber(totalCustomers) : "-"}</td>
       <td class="num">${formatCurrency(totalPayout)}</td>
       <td class="num" style="color: var(--accent);">${formatCurrency(totalOp)}</td>
       <td></td>

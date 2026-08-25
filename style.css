@@ -239,9 +239,9 @@ input, select {
   gap: clamp(12px, 1.2vw, 16px);
 }
 
-/* 카드 6개 — 넓은 화면에서 3×2로 떨어지게 (자동 배치는 5+1로 남는다) */
-@media (min-width: 900px) {
-  .kpi-grid { grid-template-columns: repeat(3, 1fr); }
+/* 카드 5개 — 넓은 화면에서는 한 줄로 */
+@media (min-width: 1040px) {
+  .kpi-grid { grid-template-columns: repeat(5, 1fr); }
 }
 
 .kpi {
