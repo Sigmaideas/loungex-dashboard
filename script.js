@@ -128,13 +128,6 @@ const monthsRange = (startYM, endYM) => {
 
 const inRange = (ym, startYM, endYM) => ym >= startYM && ym <= endYM;
 
-const parseNumberInput = (str) => {
-  if (str == null) return 0;
-  const cleaned = String(str).replace(/[^0-9.\-]/g, "");
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : 0;
-};
-
 /* ── 월 임대료: 고정 금액 또는 "매출 %" 두 가지 방식 ──
  * store.monthlyRentRate 가 있으면(예: 0.1) 임대료 = 월평균 매출(VAT 별도) × 비율,
  * 없으면 store.monthlyRent(고정 금액)를 사용한다. */
@@ -147,16 +140,6 @@ const getRentRate = (store) => {
 const resolveMonthlyRent = (store, netRevenue) => {
   const rate = getRentRate(store);
   return rate != null ? netRevenue * rate : (store.monthlyRent || 0);
-};
-
-// "10%" → 0.1 형태의 비율 입력인지 판별
-const parseRentInput = (str) => {
-  const s = String(str ?? "").trim();
-  if (s.includes("%")) {
-    const pct = parseNumberInput(s);
-    return pct > 0 ? { monthlyRentRate: pct / 100 } : { monthlyRentRate: null, monthlyRent: 0 };
-  }
-  return { monthlyRentRate: null, monthlyRent: parseNumberInput(s) };
 };
 
 /* ============================================================
@@ -608,12 +591,18 @@ function renderBranchStatus() {
   // 지점 하나당 카드 하나 — 지점명 + 바리스 운영관리 페이지의 오늘 지표
   const bars = document.getElementById("status-bars");
   if (!bars) return;
-  bars.innerHTML = (s.branches || []).map((b, i) => {
+  // 오늘 음료 제조 수량이 많은 지점부터. 수량이 아직 없는 지점은 뒤로.
+  const ordered = [...(s.branches || [])].sort((a, b) => {
+    const x = Number.isFinite(a.todayProduced) ? a.todayProduced : -1;
+    const y = Number.isFinite(b.todayProduced) ? b.todayProduced : -1;
+    return y - x || a.branchName.localeCompare(b.branchName, "ko");
+  });
+  bars.innerHTML = ordered.map((b) => {
     const cls = b.status === "OPERATING" ? "operating" : b.status === "NO_DATA" ? "nodata" : "idle";
     const label = b.status === "OPERATING" ? "운영중" : b.status === "NO_DATA" ? "데이터 없음" : "미운영";
     const hasCount = Number.isFinite(b.orderable) && Number.isFinite(b.sellable);
     return `
-      <div class="branch-card ${cls}" data-branch-index="${i}">
+      <div class="branch-card ${cls}">
         ${sparkline(b.series)}
         <div class="branch-card-head">
           <span class="branch-card-name">${escapeHtml(shortStoreName(b.branchName))}</span>
@@ -1228,7 +1217,7 @@ function renderStoreTable(startYM, endYM) {
 
   tbody.innerHTML = rows.map(({ store, ...m }) => `
     <tr data-store-id="${store.id}">
-      <td><span class="cell-editable" data-edit="store" data-field="name" data-id="${store.id}">${escapeHtml(store.name)}</span></td>
+      <td>${escapeHtml(store.name)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
       <td class="num center cell-readonly">${m.avgDailyCustomers > 0 ? `${formatNumber(Math.round(m.avgDailyCustomers))}명` : "-"}</td>
@@ -1295,109 +1284,6 @@ function defaultOperatingDays(store, ym) {
 function getOperatingDays(store, m) {
   if (m.operatingDays != null && m.operatingDays !== "") return Number(m.operatingDays);
   return defaultOperatingDays(store, m.yearMonth);
-}
-
-/* ============================================================
- *  편집 (더블클릭 → input)
- * ============================================================ */
-function attachEditableHandlers() {
-  document.body.addEventListener("dblclick", (e) => {
-    const cell = e.target.closest(".cell-editable");
-    if (!cell || cell.querySelector("input")) return;
-    startEditing(cell);
-  });
-}
-
-function startEditing(cell) {
-  const inputType = cell.dataset.inputType || "text";
-  const editKind = cell.dataset.edit;
-  const field = cell.dataset.field;
-
-  let originalValue, htmlInput;
-
-  if (editKind === "store") {
-    const store = state.stores.find((s) => s.id === cell.dataset.id);
-    if (!store) return;
-    originalValue = store[field];
-  }
-
-  if (inputType === "number") {
-    htmlInput = document.createElement("input");
-    htmlInput.type = "number";
-    htmlInput.step = "any";
-    htmlInput.value = Number(originalValue) || 0;
-  } else if (inputType === "rent") {
-    // 금액(3000000) 또는 매출 비율(10%) 모두 허용 → 텍스트 입력
-    const store = state.stores.find((s) => s.id === cell.dataset.id);
-    const rate = getRentRate(store);
-    htmlInput = document.createElement("input");
-    htmlInput.type = "text";
-    htmlInput.inputMode = "decimal";
-    htmlInput.placeholder = "3000000 또는 10%";
-    htmlInput.value = rate != null
-      ? `${Number((rate * 100).toFixed(2))}%`
-      : String(Number(store?.monthlyRent) || 0);
-  } else if (inputType === "rate") {
-    htmlInput = document.createElement("input");
-    htmlInput.type = "number";
-    htmlInput.step = "0.01";
-    htmlInput.min = "0";
-    htmlInput.max = "100";
-    htmlInput.value = ((Number(originalValue) || 0) * 100).toFixed(2);
-  } else if (inputType === "date") {
-    htmlInput = document.createElement("input");
-    htmlInput.type = "date";
-    htmlInput.value = originalValue || "";
-  } else if (inputType === "month") {
-    htmlInput = document.createElement("input");
-    htmlInput.type = "month";
-    htmlInput.value = originalValue || "";
-  } else {
-    htmlInput = document.createElement("input");
-    htmlInput.type = "text";
-    htmlInput.value = originalValue || "";
-  }
-
-  htmlInput.className = "cell-input";
-  cell.innerHTML = "";
-  cell.appendChild(htmlInput);
-  htmlInput.focus();
-  if (htmlInput.select) htmlInput.select();
-
-  let committed = false;
-  const commit = () => {
-    if (committed) return;
-    committed = true;
-    let newValue = htmlInput.value;
-    if (inputType === "number") newValue = parseNumberInput(newValue);
-    else if (inputType === "rate") newValue = parseNumberInput(newValue) / 100;
-    else if (inputType === "rent") newValue = parseRentInput(newValue); // { monthlyRent?, monthlyRentRate }
-
-    applyEdit(editKind, cell, field, newValue);
-  };
-  const cancel = () => {
-    if (committed) return;
-    committed = true;
-    renderAll();
-  };
-
-  htmlInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); commit(); }
-    else if (e.key === "Escape") { e.preventDefault(); cancel(); }
-  });
-  htmlInput.addEventListener("blur", commit);
-}
-
-function applyEdit(editKind, cell, field, newValue) {
-  if (editKind === "store") {
-    const store = state.stores.find((s) => s.id === cell.dataset.id);
-    if (!store) return;
-    // 임대료처럼 한 번에 여러 필드를 바꾸는 편집(금액/비율 전환)
-    if (newValue && typeof newValue === "object") Object.assign(store, newValue);
-    else store[field] = newValue;
-  }
-  saveToStorage();
-  renderAll();
 }
 
 /* ============================================================
@@ -2097,7 +1983,6 @@ function bindEvents() {
   });
 
   // 편집
-  attachEditableHandlers();
 }
 
 /* ============================================================

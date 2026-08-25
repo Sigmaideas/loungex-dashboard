@@ -670,19 +670,6 @@ input, select {
   text-align: right;
 }
 
-.cell-editable {
-  cursor: text;
-  border-radius: 4px;
-  padding: 6px 8px;
-  margin: -6px -8px;
-  transition: background 0.1s;
-}
-
-.cell-editable:hover {
-  background: var(--surface-2);
-  outline: 1px dashed var(--border-strong);
-}
-
 .cell-readonly {
   color: var(--text-muted);
 }
