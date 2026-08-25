@@ -742,8 +742,8 @@ function monthChangeMark(pct) {
   return `<span class="branch-month ${dir}" title="${title}">${arrow}${Math.abs(rounded)}%</span>`;
 }
 
-/* 카드 배경 스파크라인 — 최근 6개월 일별 매출의 7일 이동평균.
-   · 원본 일별 값은 요일 편차가 커서 6개월치를 그대로 그리면 톱니만 보인다.
+/* 카드 배경 스파크라인 — 최근 3개월 일별 매출의 7일 이동평균.
+   · 원본 일별 값은 요일 편차가 커서 그대로 그리면 톱니만 보인다.
    · 세로축을 0이 아니라 데이터 최소~최대로 잡는다. 0 기준이면 20~30% 변동이
      위쪽에 붙어 직선처럼 보이기 때문. */
 function sparkline(series) {
@@ -1539,17 +1539,17 @@ function toFiniteNumber(v) {
 }
 
 /**
- * 지점 한 곳의 최근 6개월 일별 실적 (바리스 매출 캘린더와 같은 소스).
+ * 지점 한 곳의 최근 3개월 일별 실적 (바리스 매출 캘린더와 같은 소스).
  * GET /analysis/sales/calendar/{branchID}/{YYYYMM}
  *   payload.data[{ date: "YYYYMMDD", tot_sell_today, tot_refund_today, weather }]
  *
- * 여섯 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
+ * 세 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
  */
 async function barisFetchDailySeries(branchID, token) {
   const now = new Date();
   const ymKey = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}`;
-  // 이번 달 포함 최근 6개월 (오래된 달 → 최근 달 순)
-  const months = [5, 4, 3, 2, 1, 0].map((back) => new Date(now.getFullYear(), now.getMonth() - back, 1));
+  // 이번 달 포함 최근 3개월 (오래된 달 → 최근 달 순)
+  const months = [2, 1, 0].map((back) => new Date(now.getFullYear(), now.getMonth() - back, 1));
 
   const byMonth = await Promise.all(months.map((d) => barisFetchMonthDays(branchID, ymKey(d), token)));
   const last = byMonth[byMonth.length - 2] || [];
