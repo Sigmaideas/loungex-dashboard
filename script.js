@@ -691,7 +691,8 @@ function renderBranchStatus() {
   });
   bars.innerHTML = ordered.map((b) => {
     const cls = b.status === "OPERATING" ? "operating" : b.status === "NO_DATA" ? "nodata" : "idle";
-    const label = b.status === "OPERATING" ? "운영중" : b.status === "NO_DATA" ? "데이터 없음" : "미운영";
+    // 운영중은 카드 색으로 이미 드러나므로 글자로는 예외 상태만 적는다
+    const label = b.status === "OPERATING" ? "" : b.status === "NO_DATA" ? "데이터 없음" : "미운영";
     const hasCount = Number.isFinite(b.orderable) && Number.isFinite(b.sellable);
     return `
       <div class="branch-card ${cls}">
@@ -700,7 +701,7 @@ function renderBranchStatus() {
           <span class="branch-card-name">${escapeHtml(shortStoreName(b.branchName))}</span>
           <span class="branch-card-head-right">
             ${monthChangeMark(b.monthChange)}
-            <span class="branch-card-status">${label}</span>
+            ${label ? `<span class="branch-card-status">${label}</span>` : ""}
           </span>
         </div>
         <div class="branch-card-metrics">
@@ -746,21 +747,38 @@ function monthChangeMark(pct) {
   return `<span class="branch-month ${dir}">지난달 대비 ${arrow}${Math.abs(rounded)}%</span>`;
 }
 
-/* 카드 배경 스파크라인 — 최근 3개월 일별 주문건수.
-   글씨를 가리지 않게 카드 아래쪽에만 옅게 깔고, 월 경계는 따로 표시하지 않는다. */
+/* 카드 배경 스파크라인 — 최근 6개월 일별 주문건수의 7일 이동평균.
+   · 원본 일별 값은 요일 편차가 커서 6개월치를 그대로 그리면 톱니만 보인다.
+   · 세로축을 0이 아니라 데이터 최소~최대로 잡는다. 0 기준이면 하루 90~130건 같은
+     20~30% 변동이 위쪽에 붙어 직선처럼 보이기 때문. */
 function sparkline(series) {
-  const pts = (series || []).filter((v) => Number.isFinite(v));
-  if (pts.length < 2) return "";
+  const raw = (series || []).filter((v) => Number.isFinite(v));
+  if (raw.length < 14) return "";
+  const pts = movingAverage(raw, 7);
   const max = Math.max(...pts);
+  const min = Math.min(...pts);
   if (max <= 0) return "";
+  const [lo, hi] = max > min ? [min, max] : [min - 1, min + 1]; // 완전 평평하면 가운데 선
 
   const stepX = 100 / (pts.length - 1);
-  const coords = pts.map((v, i) => `${(i * stepX).toFixed(2)},${(100 - (v / max) * 100).toFixed(2)}`);
+  const coords = pts.map((v, i) => {
+    const y = 100 - ((v - lo) / (hi - lo)) * 100;
+    return `${(i * stepX).toFixed(2)},${y.toFixed(2)}`;
+  });
   return `
     <svg class="branch-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <polygon points="0,100 ${coords.join(" ")} 100,100" />
       <polyline points="${coords.join(" ")}" />
     </svg>`;
+}
+
+// 앞쪽 구간은 창이 모자라므로 있는 값까지만 평균낸다(길이 유지)
+function movingAverage(values, window) {
+  return values.map((_, i) => {
+    const from = Math.max(0, i - window + 1);
+    const slice = values.slice(from, i + 1);
+    return slice.reduce((sum, v) => sum + v, 0) / slice.length;
+  });
 }
 
 /* 어제 대비 증감 — 오늘은 지금까지 누적, 어제는 하루 전체라 오전에는 대체로 ▼ 로 보인다 */
@@ -1536,23 +1554,23 @@ function toFiniteNumber(v) {
 }
 
 /**
- * 지점 한 곳의 최근 3개월 일별 실적 (바리스 매출 캘린더와 같은 소스).
+ * 지점 한 곳의 최근 6개월 일별 실적 (바리스 매출 캘린더와 같은 소스).
  * GET /analysis/sales/calendar/{branchID}/{YYYYMM}
  *   payload.data[{ date: "YYYYMMDD", order_cnt_today, product_cnt_today }]
  *
- * 세 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
+ * 여섯 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
  * 어제 수치도 여기서 뽑는다(오늘이 1일이면 지난달 데이터에 들어 있다).
  */
 async function barisFetchDailySeries(branchID, token) {
   const now = new Date();
   const ymKey = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}`;
-  // 이번 달 포함 최근 3개월 (오래된 달 → 최근 달 순)
-  const months = [2, 1, 0].map((back) => new Date(now.getFullYear(), now.getMonth() - back, 1));
+  // 이번 달 포함 최근 6개월 (오래된 달 → 최근 달 순)
+  const months = [5, 4, 3, 2, 1, 0].map((back) => new Date(now.getFullYear(), now.getMonth() - back, 1));
 
-  const [twoAgo, last, cur] = await Promise.all(
-    months.map((d) => barisFetchMonthDays(branchID, ymKey(d), token))
-  );
-  const all = [...twoAgo, ...last, ...cur];
+  const byMonth = await Promise.all(months.map((d) => barisFetchMonthDays(branchID, ymKey(d), token)));
+  const last = byMonth[byMonth.length - 2] || [];
+  const cur = byMonth[byMonth.length - 1] || [];
+  const all = byMonth.flat();
 
   const yday = new Date(now);
   yday.setDate(yday.getDate() - 1);

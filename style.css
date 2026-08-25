@@ -241,7 +241,7 @@ input, select {
 /* ───────── 오늘 날짜 · 날씨 ───────── */
 .today-card {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 14px;
   flex-wrap: wrap;
   padding: 16px clamp(14px, 1.6vw, 20px);
