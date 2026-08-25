@@ -710,13 +710,14 @@ function renderBranchStatus() {
         ${sparkline(b.series)}
         <div class="branch-card-head">
           <span class="branch-card-name">${escapeHtml(shortStoreName(b.branchName))}</span>
+          ${monthChangeMark(b.monthChange)}
           ${label ? `<span class="branch-card-status">${label}</span>` : ""}
         </div>
         <div class="branch-card-hero">
           <span class="branch-hero-value">${
             Number.isFinite(b.todayAmount) ? `${formatNumber(b.todayAmount)}<span class="branch-hero-unit">원</span>` : "-"
           }</span>
-          ${monthChangeMark(b.monthChange)}
+          <span class="branch-hero-label">오늘 매출</span>
         </div>
         <div class="branch-card-foot">${cardFootItems(b).join('<span class="branch-foot-dot">·</span>')}</div>
         <div class="branch-card-sale">${salePill(b)}</div>
@@ -753,11 +754,14 @@ function salePill(b) {
 function monthChangeMark(pct) {
   if (!Number.isFinite(pct)) return "";
   const rounded = Math.round(pct);
-  const title = "지난달 대비 (이번 달은 한 달 예상치 기준)";
-  if (rounded === 0) return `<span class="branch-month flat" title="${title}">±0%</span>`;
-  const dir = rounded > 0 ? "up" : "down";
-  const arrow = rounded > 0 ? "▲" : "▼";
-  return `<span class="branch-month ${dir}" title="${title}">${arrow}${Math.abs(rounded)}%</span>`;
+  // 지점명 옆에 놓이므로 무엇 대비인지 글자로 밝힌다(이번 달은 한 달 예상치 기준)
+  const title = "이번 달 예상 매출 ÷ 지난달 실제 매출 · 어제까지의 일평균으로 환산";
+  const body = rounded === 0
+    ? "±0%"
+    : `${rounded > 0 ? "▲" : "▼"}${Math.abs(rounded)}%`;
+  const dir = rounded === 0 ? "flat" : rounded > 0 ? "up" : "down";
+  return `<span class="branch-month ${dir}" title="${title}">` +
+    `<span class="branch-month-label">지난달 대비</span>${body}</span>`;
 }
 
 /* 카드 배경 스파크라인 — 최근 6개월 일별 매출.

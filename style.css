@@ -387,9 +387,12 @@ input, select {
 .branch-card-head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;   /* 지점명이 길면 배지를 다음 줄로 흘린다 */
+  gap: 4px 8px;
 }
+
+/* 상태 칩만 오른쪽 끝으로 */
+.branch-card-status { margin-left: auto; }
 
 .branch-card-name {
   font-size: 17px;
@@ -488,11 +491,27 @@ input, select {
   color: rgba(255, 255, 255, 0.82);
 }
 
-/* 지난달 대비(이번 달 예상 기준) 배지 — 오늘 매출 옆 */
+/* 오늘 매출임을 밝히는 작은 라벨 — 헤더 배지는 이번 달 이야기라 헷갈리지 않게 */
+.branch-hero-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #8c919b;
+}
+
+/* 지난달 대비(이번 달 예상 기준) 배지 — 지점명 옆 */
 .branch-month {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.branch-month-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #8c919b;
 }
 .branch-month.up { color: #12a150; }
 .branch-month.down { color: #d92d20; }
