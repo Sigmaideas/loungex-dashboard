@@ -554,6 +554,11 @@ async function refreshBranchStatus() {
       } catch (e) {
         detailErrors.push(`${b.branchName}: ${e.message}`);
       }
+      try {
+        Object.assign(b, await barisFetchYesterday(b.branchId, token));
+      } catch {
+        // 어제 값이 없으면 증감 표시만 빠진다
+      }
     });
     const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
     if (detailErrors.length) console.warn("[지점 상세 조회 실패]", detailErrors);
@@ -593,8 +598,8 @@ function renderBranchStatus() {
           <span class="branch-card-status">${label}</span>
         </div>
         <div class="branch-card-metrics">
-          ${metricCell("오늘 주문 건수", b.todayOrders, "건")}
-          ${metricCell("오늘 음료 제조 수량", b.todayProduced, "개")}
+          ${metricCell("오늘 주문 건수", b.todayOrders, "건", b.ydayOrders)}
+          ${metricCell("오늘 음료 제조 수량", b.todayProduced, "개", b.ydayProduced)}
           ${metricCell("오늘 결제금액", b.todayAmount, "원")}
           <div class="branch-metric">
             <div class="branch-metric-label">주문 가능 / 판매 상품</div>
@@ -612,18 +617,30 @@ function renderBranchStatus() {
   hideBranchTooltip();
 }
 
-// 카드 안의 지표 한 칸 — 값이 아직 없으면 "-"
-function metricCell(label, value, unit) {
+// 카드 안의 지표 한 칸 — 값이 아직 없으면 "-", 어제 값이 있으면 증감을 덧붙인다
+function metricCell(label, value, unit, yesterday) {
   const has = Number.isFinite(value);
   return `
     <div class="branch-metric">
       <div class="branch-metric-label">${label}</div>
       <div class="branch-metric-value">${
         has
-          ? `${formatNumber(value)}<span class="branch-metric-unit">${unit}</span>`
+          ? `${formatNumber(value)}<span class="branch-metric-unit">${unit}</span>${trendMark(value, yesterday, unit)}`
           : `<span class="branch-metric-sub">-</span>`
       }</div>
     </div>`;
+}
+
+/* 어제 대비 증감 — 같은 시각이 아니라 "어제 하루 전체"와 비교하는 값이라
+   툴팁(title)에 어제 수치를 그대로 적어 오해를 줄인다. */
+function trendMark(today, yesterday, unit) {
+  if (!Number.isFinite(yesterday)) return "";
+  const diff = today - yesterday;
+  const title = `어제 ${formatNumber(yesterday)}${unit}`;
+  if (diff === 0) return `<span class="branch-trend flat" title="${title}">±0</span>`;
+  const dir = diff > 0 ? "up" : "down";
+  const arrow = diff > 0 ? "▲" : "▼";
+  return `<span class="branch-trend ${dir}" title="${title}">${arrow} ${formatNumber(Math.abs(diff))}</span>`;
 }
 
 /* ── 타일 hover 툴팁 — 바리스 홈의 툴팁 내용을 그대로 옮긴 것 ──
@@ -1644,13 +1661,38 @@ async function barisFetchBranchDashboard(branchID, token) {
   }
   const pay = payload?.payment || {};
   const prod = payload?.product_count || {};
-  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined);
   return {
-    todayOrders: num(pay.today_payment),
-    todayProduced: num(pay.today_produce),
-    todayAmount: num(pay.today_amount),
-    orderable: num(prod.orderable),
-    sellable: num(prod.total_sellable),
+    todayOrders: toFiniteNumber(pay.today_payment),
+    todayProduced: toFiniteNumber(pay.today_produce),
+    todayAmount: toFiniteNumber(pay.today_amount),
+    orderable: toFiniteNumber(prod.orderable),
+    sellable: toFiniteNumber(prod.total_sellable),
+  };
+}
+
+// 숫자로 못 읽히면 undefined — 카드에서 "-" 로 표시된다
+function toFiniteNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * 지점 한 곳의 "어제" 주문건수/제조수량 (바리스 매출 캘린더와 같은 소스).
+ * GET /analysis/sales/calendar/{branchID}/{YYYYMM}
+ *   payload.data[{ date: "YYYYMMDD", order_cnt_today, product_cnt_today }]
+ * 어제가 지난달이면(오늘이 1일) 지난달 캘린더를 부른다.
+ */
+async function barisFetchYesterday(branchID, token) {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const yyyymm = `${d.getFullYear()}${pad(d.getMonth() + 1)}`;
+  const key = `${yyyymm}${pad(d.getDate())}`;
+  const j = await barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, token);
+  const row = (j?.payload?.data || []).find((r) => String(r.date) === key);
+  if (!row) return {};
+  return {
+    ydayOrders: toFiniteNumber(row.order_cnt_today),
+    ydayProduced: toFiniteNumber(row.product_cnt_today),
   };
 }
 

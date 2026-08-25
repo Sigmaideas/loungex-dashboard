@@ -388,6 +388,22 @@ input, select {
   color: #787e87;
 }
 
+/* 어제 대비 증감 — 값 바로 옆 작은 글씨 */
+.branch-trend {
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.branch-trend.up { color: #12a150; }
+.branch-trend.down { color: #d92d20; }
+.branch-trend.flat { color: #8c919b; }
+
+/* 파란 카드 위에서는 초록·회색이 묻히므로 밝은 톤으로 */
+.branch-card.operating .branch-trend.up { color: #7ef2b8; }
+.branch-card.operating .branch-trend.down { color: #ff3b30; }
+.branch-card.operating .branch-trend.flat { color: rgba(255, 255, 255, 0.7); }
+
 /* 주문가능 < 판매상품 → 품절이 있다는 뜻 */
 .branch-metric-value .short { color: #d92d20; }
 
