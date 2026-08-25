@@ -1020,8 +1020,6 @@ function getSortedStoreRows(startYM, endYM) {
 // 헤더를 본문과 같은 곳(script.js)에서 생성해 캐시로 인한 헤더-본문 어긋남을 방지한다.
 const STORE_COLUMNS = [
   { label: "지점명", sort: "name" },
-  { label: "오픈일", sort: "openDate" },
-  { label: "운영일자", sort: "opDays" },
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
   { label: "평균 일방문객", sort: "avgDailyCustomers", center: true, title: "객수 ÷ 운영일수 (객수가 있는 달 기준)" },
@@ -1057,8 +1055,6 @@ function renderStoreTable(startYM, endYM) {
   tbody.innerHTML = rows.map(({ store, ...m }) => `
     <tr data-store-id="${store.id}">
       <td><span class="cell-editable" data-edit="store" data-field="name" data-id="${store.id}">${escapeHtml(store.name)}</span></td>
-      <td><span class="cell-editable" data-edit="store" data-field="openDate" data-id="${store.id}" data-input-type="date">${store.openDate || "-"}</span></td>
-      <td class="num cell-readonly">${formatNumber(m.opDays)}일</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
       <td class="num center cell-readonly">${m.avgDailyCustomers > 0 ? `${formatNumber(Math.round(m.avgDailyCustomers))}명` : "-"}</td>
@@ -1066,23 +1062,23 @@ function renderStoreTable(startYM, endYM) {
     </tr>
   `).join("");
 
-  // 합계 — 매출은 지점별 월평균의 합, 방문객/객단가는 전 지점을 하나로 합쳐 다시 계산
-  const avgRevenueAll = rows.reduce((acc, r) => acc + r.avgMonthlyRevenue, 0);
-  const customersSum = rows.reduce((acc, r) => acc + r.customersAll, 0);
-  const customerDaysSum = rows.reduce((acc, r) => acc + r.opDaysWithCustomers, 0);
-  const ticketSum = rows.reduce((acc, r) => acc + r.ticketSumAll, 0);
-  const avgDailyCustomersAll = customerDaysSum > 0 ? customersSum / customerDaysSum : 0;
-  const avgTicketAll = customersSum > 0 ? ticketSum / customersSum : 0;
+  // 마지막 행은 합계가 아니라 "매장 평균" — 각 열의 지점 값을 평균낸다.
+  // 값이 없는 지점(매출 0, 객수 미입력)은 평균을 끌어내리지 않게 분모에서 뺀다.
+  const meanOf = (pick) => {
+    const vals = rows.map(pick).filter((v) => v > 0);
+    return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  };
+  const meanRevenue = meanOf((r) => r.avgMonthlyRevenue);
+  const meanDailyCustomers = meanOf((r) => r.avgDailyCustomers);
+  const meanTicket = meanOf((r) => r.avgTicket);
 
   tfoot.innerHTML = `
     <tr>
-      <td>합계</td>
-      <td></td>
-      <td></td>
-      <td class="num center">${formatCurrency(avgRevenueAll * 0.9)}</td>
-      <td class="num center">${formatCurrency(avgRevenueAll * 0.9 / 30)}</td>
-      <td class="num center">${avgDailyCustomersAll > 0 ? `${formatNumber(Math.round(avgDailyCustomersAll))}명` : "-"}</td>
-      <td class="num center">${avgTicketAll > 0 ? formatCurrency(avgTicketAll) : "-"}</td>
+      <td>매장 평균</td>
+      <td class="num center">${formatCurrency(meanRevenue * 0.9)}</td>
+      <td class="num center">${formatCurrency(meanRevenue * 0.9 / 30)}</td>
+      <td class="num center">${meanDailyCustomers > 0 ? `${formatNumber(Math.round(meanDailyCustomers))}명` : "-"}</td>
+      <td class="num center">${meanTicket > 0 ? formatCurrency(meanTicket) : "-"}</td>
     </tr>
   `;
 
