@@ -303,6 +303,14 @@ function getStoreMetrics(store, startYM, endYM) {
   const withCustomers = filtered.filter((m) => (Number(m.customers) || 0) > 0);
   const customersFiltered = withCustomers.reduce((s, m) => s + Number(m.customers), 0);
   const revenueWithCustomersFiltered = withCustomers.reduce((s, m) => s + (m.revenue || 0), 0);
+
+  // 지점 상세용(전체 기간 기준) — 객수가 있는 달만 대상으로 해야 일방문객/객단가가 왜곡되지 않는다
+  const withCustomersAll = all.filter((m) => (Number(m.customers) || 0) > 0);
+  const customersAll = withCustomersAll.reduce((s, m) => s + Number(m.customers), 0);
+  const revenueWithCustomersAll = withCustomersAll.reduce((s, m) => s + (m.revenue || 0), 0);
+  const opDaysWithCustomers = withCustomersAll.reduce((s, m) => s + getOperatingDays(store, m), 0);
+  const avgDailyCustomers = opDaysWithCustomers > 0 ? customersAll / opDaysWithCustomers : 0;
+  const avgTicket = customersAll > 0 ? revenueWithCustomersAll / customersAll : 0;
   const totalRevenueAll = all.reduce((s, m) => s + (m.revenue || 0), 0);
   const totalPayoutAll = all.reduce((s, m) => s + (m.investorPayout || 0), 0);
   const totalPayoutFiltered = filtered.reduce((s, m) => s + (m.investorPayout || 0), 0);
@@ -384,6 +392,11 @@ function getStoreMetrics(store, startYM, endYM) {
     filteredOpDays,
     customersFiltered,
     revenueWithCustomersFiltered,
+    customersAll,
+    revenueWithCustomersAll,
+    opDaysWithCustomers,
+    avgDailyCustomers,
+    avgTicket,
   };
 }
 
@@ -982,6 +995,8 @@ function getSortedStoreRows(startYM, endYM) {
       case "avgRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
       // 일평균은 월평균을 30으로 나눈 값이라 정렬 순서는 같지만, 컬럼별 정렬 상태 표시를 위해 따로 둔다
       case "avgDailyRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
+      case "avgDailyCustomers": av = a.avgDailyCustomers; bv = b.avgDailyCustomers; break;
+      case "avgTicket": av = a.avgTicket; bv = b.avgTicket; break;
       case "monthlyRent": av = a.monthlyRent; bv = b.monthlyRent; break;
       case "monthlyLabor": av = a.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; bv = b.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; break;
       case "materialCost": av = a.materialCost; bv = b.materialCost; break;
@@ -1008,7 +1023,8 @@ const STORE_COLUMNS = [
   { label: "운영일자", sort: "opDays" },
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
-  { label: "", action: true },
+  { label: "평균 일방문객", sort: "avgDailyCustomers", center: true, title: "객수 ÷ 운영일수 (객수가 있는 달 기준)" },
+  { label: "평균 객단가", sort: "avgTicket", center: true, title: "매출 ÷ 객수 (VAT 포함, 객수가 있는 달 기준)" },
 ];
 
 function renderStoreHead() {
@@ -1044,14 +1060,18 @@ function renderStoreTable(startYM, endYM) {
       <td class="num cell-readonly">${formatNumber(m.opDays)}일</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
-      <td class="col-action">
-        <button class="btn-icon" data-delete-store="${store.id}" title="지점 삭제">×</button>
-      </td>
+      <td class="num center cell-readonly">${m.avgDailyCustomers > 0 ? `${formatNumber(Math.round(m.avgDailyCustomers))}명` : "-"}</td>
+      <td class="num center cell-readonly">${m.avgTicket > 0 ? formatCurrency(m.avgTicket) : "-"}</td>
     </tr>
   `).join("");
 
-  // 합계 — 남은 열(월평균/일평균 매출)만 집계
+  // 합계 — 매출은 지점별 월평균의 합, 방문객/객단가는 전 지점을 하나로 합쳐 다시 계산
   const avgRevenueAll = rows.reduce((acc, r) => acc + r.avgMonthlyRevenue, 0);
+  const customersSum = rows.reduce((acc, r) => acc + r.customersAll, 0);
+  const customerDaysSum = rows.reduce((acc, r) => acc + r.opDaysWithCustomers, 0);
+  const customerRevenueSum = rows.reduce((acc, r) => acc + r.revenueWithCustomersAll, 0);
+  const avgDailyCustomersAll = customerDaysSum > 0 ? customersSum / customerDaysSum : 0;
+  const avgTicketAll = customersSum > 0 ? customerRevenueSum / customersSum : 0;
 
   tfoot.innerHTML = `
     <tr>
@@ -1060,7 +1080,8 @@ function renderStoreTable(startYM, endYM) {
       <td></td>
       <td class="num center">${formatCurrency(avgRevenueAll * 0.9)}</td>
       <td class="num center">${formatCurrency(avgRevenueAll * 0.9 / 30)}</td>
-      <td></td>
+      <td class="num center">${avgDailyCustomersAll > 0 ? `${formatNumber(Math.round(avgDailyCustomersAll))}명` : "-"}</td>
+      <td class="num center">${avgTicketAll > 0 ? formatCurrency(avgTicketAll) : "-"}</td>
     </tr>
   `;
 
@@ -1342,21 +1363,6 @@ function toggleStoreType(id) {
   store.type = current === STORE_TYPE_DIRECT ? STORE_TYPE_OWNER : STORE_TYPE_DIRECT;
   saveToStorage();
   renderAll();
-}
-
-function deleteStore(id) {
-  openConfirm({
-    title: "지점 삭제",
-    message: "이 지점과 관련 월별 실적이 모두 삭제됩니다. 계속하시겠습니까?",
-    onConfirm: () => {
-      state.stores = state.stores.filter((s) => s.id !== id);
-      state.monthly = state.monthly.filter((m) => m.storeId !== id);
-      if (ui.selectedStoreId === id) ui.selectedStoreId = state.stores[0]?.id || null;
-      saveToStorage();
-      renderAll();
-      showToast("삭제되었습니다.");
-    },
-  });
 }
 
 function addMonth() {
@@ -1926,11 +1932,6 @@ function bindEvents() {
 
   // 삭제 + 타입 토글 위임
   document.body.addEventListener("click", (e) => {
-    const dStore = e.target.closest("[data-delete-store]");
-    if (dStore) {
-      deleteStore(dStore.dataset.deleteStore);
-      return;
-    }
     const dMonth = e.target.closest("[data-delete-month]");
     if (dMonth) {
       const [storeId, ym] = dMonth.dataset.deleteMonth.split("|");
