@@ -19,6 +19,12 @@
   --danger-hover: #cf3a3f;
   --warn: #e0921a;
   --shadow: 0 1px 2px rgba(20, 23, 38, 0.06), 0 1px 3px rgba(20, 23, 38, 0.04);
+  /* 화면 좌우 여백 — 카드가 브라우저 끝에 붙지 않게 */
+  --page-gutter: clamp(16px, 2.4vw, 32px);
+}
+
+@media (max-width: 560px) {
+  :root { --page-gutter: 12px; }
 }
 
 * {
@@ -57,7 +63,7 @@ input, select {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: clamp(12px, 1.6vw, 16px) 0;
+  padding: clamp(12px, 1.6vw, 16px) var(--page-gutter);
   background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
@@ -81,7 +87,7 @@ input, select {
   width: 100%;
   max-width: 100%;
   margin: 0 auto;
-  padding: clamp(14px, 2.2vw, 24px) 0 80px;
+  padding: clamp(14px, 2.2vw, 24px) var(--page-gutter) 80px;
   display: flex;
   flex-direction: column;
   gap: clamp(12px, 1.6vw, 20px);
