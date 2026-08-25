@@ -614,7 +614,6 @@ function renderBranchStatus() {
         </div>
       </div>`;
   }).join("");
-  hideBranchTooltip();
 }
 
 // 카드 안의 지표 한 칸 — 값이 아직 없으면 "-", 어제 값이 있으면 증감을 덧붙인다
@@ -625,66 +624,20 @@ function metricCell(label, value, unit, yesterday) {
       <div class="branch-metric-label">${label}</div>
       <div class="branch-metric-value">${
         has
-          ? `${formatNumber(value)}<span class="branch-metric-unit">${unit}</span>${trendMark(value, yesterday, unit)}`
+          ? `${formatNumber(value)}<span class="branch-metric-unit">${unit}</span>${trendMark(value, yesterday)}`
           : `<span class="branch-metric-sub">-</span>`
       }</div>
     </div>`;
 }
 
-/* 어제 대비 증감 — 같은 시각이 아니라 "어제 하루 전체"와 비교하는 값이라
-   툴팁(title)에 어제 수치를 그대로 적어 오해를 줄인다. */
-function trendMark(today, yesterday, unit) {
+/* 어제 대비 증감 — 오늘은 지금까지 누적, 어제는 하루 전체라 오전에는 대체로 ▼ 로 보인다 */
+function trendMark(today, yesterday) {
   if (!Number.isFinite(yesterday)) return "";
   const diff = today - yesterday;
-  const title = `어제 ${formatNumber(yesterday)}${unit}`;
-  if (diff === 0) return `<span class="branch-trend flat" title="${title}">±0</span>`;
+  if (diff === 0) return `<span class="branch-trend flat">±0</span>`;
   const dir = diff > 0 ? "up" : "down";
   const arrow = diff > 0 ? "▲" : "▼";
-  return `<span class="branch-trend ${dir}" title="${title}">${arrow} ${formatNumber(Math.abs(diff))}</span>`;
-}
-
-/* ── 타일 hover 툴팁 — 바리스 홈의 툴팁 내용을 그대로 옮긴 것 ──
- *   지점명 / 총 가동률 / 운영중 · 미운영 시간
- *   데이터 없음(NO_DATA) 타일은 바리스와 마찬가지로 툴팁을 띄우지 않는다. */
-function showBranchTooltip(tile) {
-  const tip = document.getElementById("status-tooltip");
-  const list = branchStatusSummary?.branches || [];
-  const b = list[Number(tile.dataset.branchIndex)];
-  if (!tip || !b || tile.classList.contains("nodata")) return;
-
-  tip.innerHTML = `
-    <div class="tip-title">${escapeHtml(b.branchName || "지점 정보 없음")}</div>
-    <div class="tip-row tip-rate"><span>총 가동률</span><span>${b.totalRate}%</span></div>
-    <div class="tip-sep"></div>
-    <div class="tip-row"><span>운영중</span><span>${formatMinutes(b.runTime)}</span></div>
-    <div class="tip-row"><span>미운영</span><span>${formatMinutes(b.downTime)}</span></div>
-  `;
-  tip.hidden = false;
-
-  // 타일 아래 중앙에 붙이되, 화면 밖으로 나가면 안으로 밀어넣고 꼬리만 타일 쪽에 남긴다
-  const r = tile.getBoundingClientRect();
-  const w = tip.offsetWidth;
-  const margin = 8;
-  const center = r.left + r.width / 2;
-  const left = Math.min(Math.max(center - w / 2, margin), window.innerWidth - w - margin);
-  tip.style.left = `${left}px`;
-  tip.style.top = `${r.bottom + 10}px`;
-  tip.style.setProperty("--arrow-left", `${center - left}px`);
-}
-
-function hideBranchTooltip() {
-  const tip = document.getElementById("status-tooltip");
-  if (tip) tip.hidden = true;
-}
-
-// 분 → "N시간 M분" (바리스 툴팁 표기와 동일)
-function formatMinutes(min) {
-  const total = Math.max(0, Math.floor(Number(min) || 0));
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-  if (h <= 0) return `${m}분`;
-  if (m <= 0) return `${h}시간`;
-  return `${h}시간 ${m}분`;
+  return `<span class="branch-trend ${dir}">${arrow} ${formatNumber(Math.abs(diff))}</span>`;
 }
 
 function renderKPI(startYM, endYM) {
@@ -2128,23 +2081,6 @@ function bindEvents() {
     renderStoreTable(ui.filterStart, ui.filterEnd);
     renderStoreSelect();
   });
-
-  // 지점 상태 타일 툴팁
-  const barsEl = document.getElementById("status-bars");
-  if (barsEl) {
-    barsEl.addEventListener("mouseover", (e) => {
-      const tile = e.target.closest(".branch-card");
-      if (tile) showBranchTooltip(tile);
-    });
-    barsEl.addEventListener("mouseout", (e) => {
-      const tile = e.target.closest(".branch-card");
-      if (tile && !barsEl.contains(e.relatedTarget)) hideBranchTooltip();
-      else if (tile && e.relatedTarget?.closest?.(".branch-card") !== tile) hideBranchTooltip();
-    });
-    barsEl.addEventListener("mouseleave", hideBranchTooltip);
-  }
-  // 스크롤하면 타일 위치가 어긋나므로 툴팁을 닫는다
-  window.addEventListener("scroll", hideBranchTooltip, { passive: true });
 
   // 삭제 + 타입 토글 위임
   document.body.addEventListener("click", (e) => {
