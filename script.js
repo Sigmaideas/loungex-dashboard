@@ -654,8 +654,8 @@ function monthChangeMark(pct) {
   return `<span class="branch-month ${dir}">지난달 대비 ${arrow}${Math.abs(rounded)}%</span>`;
 }
 
-/* 카드 배경 스파크라인 — 최근 두 달 일별 주문건수.
-   글씨를 가리지 않게 카드 아래쪽에만 옅게 깔고, 지난달/이번 달 경계는 따지지 않는다. */
+/* 카드 배경 스파크라인 — 최근 3개월 일별 주문건수.
+   글씨를 가리지 않게 카드 아래쪽에만 옅게 깔고, 월 경계는 따로 표시하지 않는다. */
 function sparkline(series) {
   const pts = (series || []).filter((v) => Number.isFinite(v));
   if (pts.length < 2) return "";
@@ -1451,32 +1451,31 @@ function toFiniteNumber(v) {
 }
 
 /**
- * 지점 한 곳의 최근 두 달 일별 실적 (바리스 매출 캘린더와 같은 소스).
+ * 지점 한 곳의 최근 3개월 일별 실적 (바리스 매출 캘린더와 같은 소스).
  * GET /analysis/sales/calendar/{branchID}/{YYYYMM}
  *   payload.data[{ date: "YYYYMMDD", order_cnt_today, product_cnt_today }]
  *
- * 이번 달 + 지난달을 붙여 카드 배경 스파크라인과 "지난달 대비"를 함께 만든다.
+ * 세 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
  * 어제 수치도 여기서 뽑는다(오늘이 1일이면 지난달 데이터에 들어 있다).
  */
 async function barisFetchDailySeries(branchID, token) {
   const now = new Date();
-  const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const ymKey = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}`;
+  // 이번 달 포함 최근 3개월 (오래된 달 → 최근 달 순)
+  const months = [2, 1, 0].map((back) => new Date(now.getFullYear(), now.getMonth() - back, 1));
 
-  const [last, cur] = await Promise.all([
-    barisFetchMonthDays(branchID, ymKey(lastMonth), token),
-    barisFetchMonthDays(branchID, ymKey(thisMonth), token),
-  ]);
+  const [twoAgo, last, cur] = await Promise.all(
+    months.map((d) => barisFetchMonthDays(branchID, ymKey(d), token))
+  );
+  const all = [...twoAgo, ...last, ...cur];
 
   const yday = new Date(now);
   yday.setDate(yday.getDate() - 1);
-  const ydayKey = `${ymKey(yday)}${pad(yday.getDate())}`;
-  const ydayRow = [...last, ...cur].find((r) => r.date === ydayKey);
+  const ydayRow = all.find((r) => r.date === `${ymKey(yday)}${pad(yday.getDate())}`);
 
   const todayKey = `${ymKey(now)}${pad(now.getDate())}`;
   return {
-    series: [...last, ...cur].map((r) => r.orders),
+    series: all.map((r) => r.orders),
     monthChange: monthOverMonthChange(last, cur, now),
     ydayOrders: ydayRow?.orders,
     ydayProduced: ydayRow?.produced,
