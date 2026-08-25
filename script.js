@@ -291,23 +291,35 @@ function getMonthlyForStore(storeId) {
     .sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
 }
 
+/**
+ * 그 달의 객단가 — 바리스에서 받아온 avgTicket(avg_cust_tran)을 우선 쓰고,
+ * 없으면(수기로 객수만 넣은 달) 매출 ÷ 객수로 대체한다.
+ */
+function monthTicket(m) {
+  const imported = Number(m.avgTicket) || 0;
+  if (imported > 0) return imported;
+  const customers = Number(m.customers) || 0;
+  return customers > 0 ? (m.revenue || 0) / customers : 0;
+}
+
 function getStoreMetrics(store, startYM, endYM) {
   const all = getMonthlyForStore(store.id);
   const filtered = all.filter((m) => inRange(m.yearMonth, startYM, endYM));
 
   const totalRevenue = filtered.reduce((s, m) => s + (m.revenue || 0), 0);
-  // 객수: 입력된 달만 합산. 객단가는 "객수가 있는 달의 매출"로만 나눠야 하므로 짝이 되는 매출도 함께 모은다
+  // 객수·객단가는 값이 있는 달만 대상으로 한다(일부 달만 있어도 평균이 희석되지 않게)
   const withCustomers = filtered.filter((m) => (Number(m.customers) || 0) > 0);
   const customersFiltered = withCustomers.reduce((s, m) => s + Number(m.customers), 0);
-  const revenueWithCustomersFiltered = withCustomers.reduce((s, m) => s + (m.revenue || 0), 0);
+  // 객단가 합계 = Σ(객단가 × 객수) → 나중에 객수로 나누면 객수 가중평균이 된다
+  const ticketSumFiltered = withCustomers.reduce((s, m) => s + monthTicket(m) * Number(m.customers), 0);
 
-  // 지점 상세용(전체 기간 기준) — 객수가 있는 달만 대상으로 해야 일방문객/객단가가 왜곡되지 않는다
+  // 지점 상세용(전체 기간 기준)
   const withCustomersAll = all.filter((m) => (Number(m.customers) || 0) > 0);
   const customersAll = withCustomersAll.reduce((s, m) => s + Number(m.customers), 0);
-  const revenueWithCustomersAll = withCustomersAll.reduce((s, m) => s + (m.revenue || 0), 0);
+  const ticketSumAll = withCustomersAll.reduce((s, m) => s + monthTicket(m) * Number(m.customers), 0);
   const opDaysWithCustomers = withCustomersAll.reduce((s, m) => s + getOperatingDays(store, m), 0);
   const avgDailyCustomers = opDaysWithCustomers > 0 ? customersAll / opDaysWithCustomers : 0;
-  const avgTicket = customersAll > 0 ? revenueWithCustomersAll / customersAll : 0;
+  const avgTicket = customersAll > 0 ? ticketSumAll / customersAll : 0;
   const totalRevenueAll = all.reduce((s, m) => s + (m.revenue || 0), 0);
   const totalPayoutAll = all.reduce((s, m) => s + (m.investorPayout || 0), 0);
   const totalPayoutFiltered = filtered.reduce((s, m) => s + (m.investorPayout || 0), 0);
@@ -388,9 +400,9 @@ function getStoreMetrics(store, startYM, endYM) {
     avgMonthlyRevenueFiltered,
     filteredOpDays,
     customersFiltered,
-    revenueWithCustomersFiltered,
+    ticketSumFiltered,
     customersAll,
-    revenueWithCustomersAll,
+    ticketSumAll,
     opDaysWithCustomers,
     avgDailyCustomers,
     avgTicket,
@@ -508,7 +520,7 @@ function renderKPI(startYM, endYM) {
 
   let totalRevenue = 0;
   let totalCustomers = 0;
-  let totalRevenueWithCustomers = 0;
+  let totalTicketSum = 0;
   // 평균 월매출: 매출이 있는 매장의 "선택 기간 월평균 매출"을 매장 수로 나눈 값
   let avgMonthlyRevenueSum = 0;
   let revenueStoreCount = 0;
@@ -517,7 +529,7 @@ function renderKPI(startYM, endYM) {
     const m = getStoreMetrics(store, startYM, endYM);
     totalRevenue += m.totalRevenue;
     totalCustomers += m.customersFiltered;
-    totalRevenueWithCustomers += m.revenueWithCustomersFiltered;
+    totalTicketSum += m.ticketSumFiltered;
     if (m.totalRevenue > 0) {
       avgMonthlyRevenueSum += m.avgMonthlyRevenueFiltered;
       revenueStoreCount++;
@@ -532,17 +544,12 @@ function renderKPI(startYM, endYM) {
   document.getElementById("kpi-avg-store-revenue").textContent = formatCurrency(avgStoreRevenue);
   document.getElementById("kpi-avg-daily-revenue").textContent = formatCurrency(avgStoreRevenue / 30);
 
-  // 평균 객단가 = 매출 / 객수. 객수는 월별 실적에 입력된 값만 사용하므로,
-  // 값이 없으면 억지로 계산하지 않고 "-" 로 둔다.
+  // 평균 객단가 = 바리스 월별 객단가의 객수 가중평균. 객수가 없으면 "-" 로 둔다.
   const ticketEl = document.getElementById("kpi-avg-ticket");
   const ticketSubEl = document.getElementById("kpi-avg-ticket-sub");
   if (totalCustomers > 0) {
-    ticketEl.textContent = formatCurrency(totalRevenueWithCustomers / totalCustomers);
-    // 객수가 일부 달/지점에만 있으면 그만큼의 매출만 쓴 값이라는 것을 밝혀둔다
-    const partial = totalRevenueWithCustomers < totalRevenue;
-    ticketSubEl.textContent = partial
-      ? `객수 입력분만 · ${formatNumber(totalCustomers)}명`
-      : `선택 기간 · 객수 ${formatNumber(totalCustomers)}명`;
+    ticketEl.textContent = formatCurrency(totalTicketSum / totalCustomers);
+    ticketSubEl.textContent = `선택 기간 · 객수 ${formatNumber(totalCustomers)}명`;
   } else {
     ticketEl.textContent = "-";
     ticketSubEl.textContent = "월별 실적에 객수를 입력하면 표시됩니다";
@@ -1018,7 +1025,7 @@ const STORE_COLUMNS = [
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
   { label: "평균 일방문객", sort: "avgDailyCustomers", center: true, title: "객수 ÷ 운영일수 (객수가 있는 달 기준)" },
-  { label: "평균 객단가", sort: "avgTicket", center: true, title: "매출 ÷ 객수 (VAT 포함, 객수가 있는 달 기준)" },
+  { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
 ];
 
 function renderStoreHead() {
@@ -1063,9 +1070,9 @@ function renderStoreTable(startYM, endYM) {
   const avgRevenueAll = rows.reduce((acc, r) => acc + r.avgMonthlyRevenue, 0);
   const customersSum = rows.reduce((acc, r) => acc + r.customersAll, 0);
   const customerDaysSum = rows.reduce((acc, r) => acc + r.opDaysWithCustomers, 0);
-  const customerRevenueSum = rows.reduce((acc, r) => acc + r.revenueWithCustomersAll, 0);
+  const ticketSum = rows.reduce((acc, r) => acc + r.ticketSumAll, 0);
   const avgDailyCustomersAll = customerDaysSum > 0 ? customersSum / customerDaysSum : 0;
-  const avgTicketAll = customersSum > 0 ? customerRevenueSum / customersSum : 0;
+  const avgTicketAll = customersSum > 0 ? ticketSum / customersSum : 0;
 
   tfoot.innerHTML = `
     <tr>
@@ -1399,7 +1406,9 @@ async function barisGet(path, token) {
  *     : 0매출 일자를 비-0 일평균으로 채워 추정. 월 중간 오픈 케이스 처리.
  *   - 현재(진행 중)/미래 월: tot_sell_month - tot_refund_month (실제 누적).
  *     : 며칠 안 지난 시점에서의 과대 추정 방지.
- *  객수: tot_order_cnt (그 달 주문건수). 바리스 화면의 "주문건수 (평균 객단가)"와 같은 값.
+ *  객수: tot_order_cnt (그 달 주문건수), 객단가: avg_cust_tran (그 달 평균 객단가).
+ *   ↳ 바리스 매출 캘린더의 "주문건수 (평균 객단가)" 그대로. 객단가는 바리스 실매출 기준이라
+ *     우리 매출(과거 월은 예상매출)로 나눈 값보다 정확해서 받아온 값을 그대로 쓴다.
  */
 async function barisFetchMonthSales(branchID, ym, token) {
   const yyyymm = ym.replace("-", "");
@@ -1413,7 +1422,11 @@ async function barisFetchMonthSales(branchID, ym, token) {
     ? predict
     : Math.max(0, actual - refund);
 
-  return { revenue, customers: Math.max(0, Math.round(Number(p.tot_order_cnt) || 0)) };
+  return {
+    revenue,
+    customers: Math.max(0, Math.round(Number(p.tot_order_cnt) || 0)),
+    avgTicket: Math.max(0, Number(p.avg_cust_tran) || 0),
+  };
 }
 
 function isMonthInProgressOrFuture(ym) {
@@ -1514,10 +1527,10 @@ async function importFromBaris({ account, password, token: presetToken, startYM,
     onProgress?.(`(${i + 1}/${targets.length}) ${branchName} 매출 조회 중...`);
     const monthResults = await runWithConcurrency(months, 6, async (ym) => {
       try {
-        const { revenue, customers } = await barisFetchMonthSales(b.branchID, ym, branchToken);
-        return { ym, revenue, customers };
+        const { revenue, customers, avgTicket } = await barisFetchMonthSales(b.branchID, ym, branchToken);
+        return { ym, revenue, customers, avgTicket };
       } catch {
-        return { ym, revenue: 0, customers: 0 };
+        return { ym, revenue: 0, customers: 0, avgTicket: 0 };
       } finally {
         done++;
         if (done % 5 === 0 || done === total) {
@@ -1528,10 +1541,10 @@ async function importFromBaris({ account, password, token: presetToken, startYM,
 
     let firstYM = null;
     const monthly = [];
-    for (const { ym, revenue, customers } of monthResults) {
+    for (const { ym, revenue, customers, avgTicket } of monthResults) {
       if (revenue > 0) {
         if (!firstYM || ym < firstYM) firstYM = ym;
-        monthly.push({ storeId: b.branchID, yearMonth: ym, revenue, customers, investorPayout: 0 });
+        monthly.push({ storeId: b.branchID, yearMonth: ym, revenue, customers, avgTicket, investorPayout: 0 });
       }
     }
 
@@ -1576,8 +1589,9 @@ function mergeBarisResult(result) {
     if (m.storeId === branchID && incomingByYM.has(m.yearMonth)) {
       const incoming = incomingByYM.get(m.yearMonth);
       m.revenue = incoming.revenue;
-      // 객수는 바리스에서 받아온 값이 있을 때만 덮어쓴다(수기 입력 보존)
+      // 객수·객단가는 바리스에서 받아온 값이 있을 때만 덮어쓴다(수기 입력 보존)
       if (incoming.customers > 0) m.customers = incoming.customers;
+      if (incoming.avgTicket > 0) m.avgTicket = incoming.avgTicket;
       incomingByYM.delete(m.yearMonth);
     }
   }
@@ -1588,6 +1602,7 @@ function mergeBarisResult(result) {
       yearMonth: ym,
       revenue: incoming.revenue,
       customers: incoming.customers,
+      avgTicket: incoming.avgTicket,
       investorPayout: 0,
     });
   }
