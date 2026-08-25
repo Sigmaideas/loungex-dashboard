@@ -305,10 +305,38 @@ input, select {
 }
 
 .branch-card {
+  position: relative;
+  overflow: hidden;
   padding: 20px 22px;
   border-radius: 14px;
   box-sizing: border-box;
 }
+
+/* 배경 스파크라인 — 카드 아래쪽에만 옅게 깔아 글씨를 가리지 않는다 */
+.branch-spark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 38%;
+  pointer-events: none;
+}
+.branch-spark polygon { fill: rgba(41, 111, 247, 0.09); }
+.branch-spark polyline {
+  fill: none;
+  stroke: rgba(41, 111, 247, 0.28);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.branch-card.idle .branch-spark polygon,
+.branch-card.nodata .branch-spark polygon { fill: rgba(120, 126, 135, 0.10); }
+.branch-card.idle .branch-spark polyline,
+.branch-card.nodata .branch-spark polyline { stroke: rgba(120, 126, 135, 0.25); }
+
+/* 배경 위로 내용이 올라오게 */
+.branch-card-head,
+.branch-card-metrics { position: relative; }
 
 /* 운영중은 연한 파란 박스, 미운영·데이터없음은 회색 계열 */
 .branch-card.operating { background: #dfebff; }
@@ -332,12 +360,29 @@ input, select {
   white-space: nowrap;
 }
 
+.branch-card-head-right {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+}
+
 .branch-card-status {
   font-size: 13px;
   font-weight: 500;
   color: #8c919b;
   white-space: nowrap;
 }
+
+/* 지난달 대비 배지 */
+.branch-month {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.branch-month.up { color: #12a150; }
+.branch-month.down { color: #d92d20; }
+.branch-month.flat { color: #8c919b; }
 
 /* 운영중 표시만 파란 글씨로 강조 */
 .branch-card.operating .branch-card-status { color: #296ff7; }

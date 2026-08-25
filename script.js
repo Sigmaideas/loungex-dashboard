@@ -555,9 +555,9 @@ async function refreshBranchStatus() {
         detailErrors.push(`${b.branchName}: ${e.message}`);
       }
       try {
-        Object.assign(b, await barisFetchYesterday(b.branchId, token));
+        Object.assign(b, await barisFetchDailySeries(b.branchId, token));
       } catch {
-        // 어제 값이 없으면 증감 표시만 빠진다
+        // 일별 실적이 없으면 증감·배경 그래프만 빠진다
       }
     });
     const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
@@ -593,9 +593,13 @@ function renderBranchStatus() {
     const hasCount = Number.isFinite(b.orderable) && Number.isFinite(b.sellable);
     return `
       <div class="branch-card ${cls}" data-branch-index="${i}">
+        ${sparkline(b.series)}
         <div class="branch-card-head">
           <span class="branch-card-name">${escapeHtml(shortStoreName(b.branchName))}</span>
-          <span class="branch-card-status">${label}</span>
+          <span class="branch-card-head-right">
+            ${monthChangeMark(b.monthChange)}
+            <span class="branch-card-status">${label}</span>
+          </span>
         </div>
         <div class="branch-card-metrics">
           ${metricCell("오늘 주문 건수", b.todayOrders, "건", b.ydayOrders)}
@@ -628,6 +632,33 @@ function metricCell(label, value, unit, yesterday) {
           : `<span class="branch-metric-sub">-</span>`
       }</div>
     </div>`;
+}
+
+/* 지난달 대비 일평균 주문건수 변화율 */
+function monthChangeMark(pct) {
+  if (!Number.isFinite(pct)) return "";
+  const rounded = Math.round(pct);
+  if (rounded === 0) return `<span class="branch-month flat">지난달 대비 ±0%</span>`;
+  const dir = rounded > 0 ? "up" : "down";
+  const arrow = rounded > 0 ? "▲" : "▼";
+  return `<span class="branch-month ${dir}">지난달 대비 ${arrow}${Math.abs(rounded)}%</span>`;
+}
+
+/* 카드 배경 스파크라인 — 최근 두 달 일별 주문건수.
+   글씨를 가리지 않게 카드 아래쪽에만 옅게 깔고, 지난달/이번 달 경계는 따지지 않는다. */
+function sparkline(series) {
+  const pts = (series || []).filter((v) => Number.isFinite(v));
+  if (pts.length < 2) return "";
+  const max = Math.max(...pts);
+  if (max <= 0) return "";
+
+  const stepX = 100 / (pts.length - 1);
+  const coords = pts.map((v, i) => `${(i * stepX).toFixed(2)},${(100 - (v / max) * 100).toFixed(2)}`);
+  return `
+    <svg class="branch-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points="0,100 ${coords.join(" ")} 100,100" />
+      <polyline points="${coords.join(" ")}" />
+    </svg>`;
 }
 
 /* 어제 대비 증감 — 오늘은 지금까지 누적, 어제는 하루 전체라 오전에는 대체로 ▼ 로 보인다 */
@@ -1630,23 +1661,61 @@ function toFiniteNumber(v) {
 }
 
 /**
- * 지점 한 곳의 "어제" 주문건수/제조수량 (바리스 매출 캘린더와 같은 소스).
+ * 지점 한 곳의 최근 두 달 일별 실적 (바리스 매출 캘린더와 같은 소스).
  * GET /analysis/sales/calendar/{branchID}/{YYYYMM}
  *   payload.data[{ date: "YYYYMMDD", order_cnt_today, product_cnt_today }]
- * 어제가 지난달이면(오늘이 1일) 지난달 캘린더를 부른다.
+ *
+ * 이번 달 + 지난달을 붙여 카드 배경 스파크라인과 "지난달 대비"를 함께 만든다.
+ * 어제 수치도 여기서 뽑는다(오늘이 1일이면 지난달 데이터에 들어 있다).
  */
-async function barisFetchYesterday(branchID, token) {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  const yyyymm = `${d.getFullYear()}${pad(d.getMonth() + 1)}`;
-  const key = `${yyyymm}${pad(d.getDate())}`;
-  const j = await barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, token);
-  const row = (j?.payload?.data || []).find((r) => String(r.date) === key);
-  if (!row) return {};
+async function barisFetchDailySeries(branchID, token) {
+  const now = new Date();
+  const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const ymKey = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}`;
+
+  const [last, cur] = await Promise.all([
+    barisFetchMonthDays(branchID, ymKey(lastMonth), token),
+    barisFetchMonthDays(branchID, ymKey(thisMonth), token),
+  ]);
+
+  const yday = new Date(now);
+  yday.setDate(yday.getDate() - 1);
+  const ydayKey = `${ymKey(yday)}${pad(yday.getDate())}`;
+  const ydayRow = [...last, ...cur].find((r) => r.date === ydayKey);
+
   return {
-    ydayOrders: toFiniteNumber(row.order_cnt_today),
-    ydayProduced: toFiniteNumber(row.product_cnt_today),
+    series: [...last, ...cur].map((r) => r.orders),
+    monthChange: monthOverMonthChange(last, cur, now),
+    ydayOrders: ydayRow?.orders,
+    ydayProduced: ydayRow?.produced,
   };
+}
+
+async function barisFetchMonthDays(branchID, yyyymm, token) {
+  const j = await barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, token);
+  return (j?.payload?.data || [])
+    .map((r) => ({
+      date: String(r.date),
+      orders: toFiniteNumber(r.order_cnt_today) ?? 0,
+      produced: toFiniteNumber(r.product_cnt_today) ?? 0,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * 지난달 대비 변화율(%) — 이번 달은 아직 진행 중이라 총합끼리 비교하면 항상 마이너스다.
+ * 그래서 "하루 평균 주문건수"로 비교하고, 오늘은 아직 안 끝났으니 어제까지만 센다.
+ */
+function monthOverMonthChange(lastDays, curDays, now) {
+  const todayKey = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const done = curDays.filter((r) => r.date < todayKey);
+  if (lastDays.length === 0 || done.length === 0) return undefined;
+
+  const avg = (rows) => rows.reduce((sum, r) => sum + r.orders, 0) / rows.length;
+  const lastAvg = avg(lastDays);
+  if (lastAvg <= 0) return undefined;
+  return ((avg(done) - lastAvg) / lastAvg) * 100;
 }
 
 async function barisFetchOwnBranches(token) {
