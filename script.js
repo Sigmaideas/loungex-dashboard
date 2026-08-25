@@ -549,6 +549,11 @@ async function refreshBranchStatus() {
       (n) => !ONSITE_PAY.test(n) && !APP_PAY.test(n) && !EXCLUDED_PAY.test(n)
     );
     if (unmapped.length) console.warn("[현장/앱 미분류 결제수단]", unmapped.join(", "));
+    // 바리스 매출분석 화면과 숫자를 직접 대조할 수 있게 원본을 남긴다
+    const payRows = mine.flatMap((b) =>
+      (b.payTypes || []).map((p) => ({ 지점: b.branchName, 결제수단: p.name, 건수: p.count, 금액: p.amount }))
+    );
+    if (payRows.length && console.table) console.table(payRows);
 
     const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
     const graphed = mine.filter((b) => (b.series || []).length > 0).length;
@@ -1330,11 +1335,18 @@ const STORE_COLUMNS = [
   { label: "앱 결제비율", sort: "appRatio", center: true, title: "누적 결제 건수 중 앱 결제 비중 · 결제수단으로 구분(카드·현금=현장, 간편결제=앱)" },
 ];
 
-// 지점 상세(로컬 매출 데이터)와 바리스 실시간 상태를 지점ID로 잇는다. 없으면 지점명으로.
+/* 지점 상세(로컬 매출 데이터)와 바리스 실시간 상태를 잇는다.
+   두 데이터가 서로 다른 API에서 와 지점ID 체계가 다를 수 있어, 이름으로도 맞춰 본다.
+   공백·괄호·접두어 차이로 어긋나는 경우가 많아 이름은 정규화해 비교한다. */
+const normalizeBranchName = (name) =>
+  String(name || "").replace(/[\s()\-–—_·]/g, "").toLowerCase();
+
 function branchPayTypes(store) {
   const list = branchStatusSummary?.branches || [];
-  const hit = list.find((b) => b.branchId === store.id) ||
-    list.find((b) => b.branchName === store.name);
+  const key = normalizeBranchName(store.name);
+  const hit =
+    list.find((b) => b.branchId && b.branchId === store.id) ||
+    list.find((b) => normalizeBranchName(b.branchName) === key);
   return hit?.payTypes;
 }
 
