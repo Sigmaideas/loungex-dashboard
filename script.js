@@ -2033,7 +2033,6 @@ function bindEvents() {
   });
 
 
-  document.getElementById("btn-save").addEventListener("click", cloudSave);
 
 
   // 정렬 (헤더가 매 렌더마다 재생성되므로 위임 방식으로 바인딩)
