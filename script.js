@@ -706,12 +706,15 @@ function renderBranchStatus() {
           }</span>
           ${monthChangeMark(b.monthChange)}
         </div>
-        <div class="branch-card-foot">${cardFootItems(b).join('<span class="branch-foot-dot">·</span>')}</div>
+        <div class="branch-card-foot">
+          <span class="branch-foot-left">${cardFootItems(b).join('<span class="branch-foot-dot">·</span>')}</span>
+          ${salePill(b)}
+        </div>
       </div>`;
   }).join("");
 }
 
-/* 카드 아래 한 줄 — 오늘 주문·제조·상품 수. 라벨이 길어 카드가 복잡해지므로
+/* 카드 아래 한 줄 — 오늘 주문·제조. 라벨이 길어 카드가 복잡해지므로
    "오늘"은 큰 숫자(오늘 매출)에서 한 번만 말하고 여기서는 짧은 말만 쓴다. */
 function cardFootItems(b) {
   const items = [];
@@ -721,14 +724,19 @@ function cardFootItems(b) {
   if (Number.isFinite(b.todayProduced)) {
     items.push(`<span>제조 <b>${formatNumber(b.todayProduced)}</b>잔</span>`);
   }
-  if (Number.isFinite(b.orderable) && Number.isFinite(b.sellable)) {
-    const short = b.orderable < b.sellable ? " short" : "";
-    items.push(
-      `<span>판매 <b class="${short.trim()}">${formatNumber(b.orderable)}</b>` +
-      `<span class="branch-foot-sub">/${formatNumber(b.sellable)}</span></span>`
-    );
-  }
   return items; // 값이 하나도 없으면 상태 칩("데이터 없음")만 남기고 비워 둔다
+}
+
+/* 판매 상태는 매장이 지금 돈을 벌 수 있는지를 좌우해서, 다른 지표와 섞지 않고
+   알약 하나로 떼어 놓는다. 품절이 있으면 빨간 배경으로 바로 눈에 띄게 한다. */
+function salePill(b) {
+  if (!Number.isFinite(b.orderable) || !Number.isFinite(b.sellable)) return "";
+  const soldout = b.sellable - b.orderable;
+  if (soldout <= 0) {
+    return `<span class="branch-sale">전 상품 판매중 <b>${formatNumber(b.sellable)}</b></span>`;
+  }
+  return `<span class="branch-sale short">품절 <b>${formatNumber(soldout)}</b>` +
+    `<span class="branch-sale-sub">주문가능 ${formatNumber(b.orderable)}/${formatNumber(b.sellable)}</span></span>`;
 }
 
 /* 지난달 대비 매출 변화율 — 이번 달은 한 달 예상치로 환산해 비교한다 */
@@ -742,29 +750,55 @@ function monthChangeMark(pct) {
   return `<span class="branch-month ${dir}" title="${title}">${arrow}${Math.abs(rounded)}%</span>`;
 }
 
-/* 카드 배경 스파크라인 — 최근 3개월 일별 매출의 7일 이동평균.
-   · 원본 일별 값은 요일 편차가 커서 그대로 그리면 톱니만 보인다.
-   · 세로축을 0이 아니라 데이터 최소~최대로 잡는다. 0 기준이면 20~30% 변동이
-     위쪽에 붙어 직선처럼 보이기 때문. */
+/* 카드 배경 스파크라인 — 최근 6개월 일별 매출.
+   세 단계로 다듬는다.
+     1) 14일 이동평균 : 요일 편차(주말 골)와 하루짜리 튐을 걷어낸다
+     2) 40점으로 축약 : 180점을 300px 에 그리면 점 간격이 1.7px 라 미세 떨림이 남는다
+     3) Catmull-Rom   : 남은 점을 부드러운 곡선으로 잇는다(꺾인 선 대신)
+   세로축은 0이 아니라 데이터 최소~최대. 0 기준이면 20~30% 변동이 위쪽에 붙어
+   직선처럼 보이기 때문. */
 function sparkline(series) {
   const raw = (series || []).filter((v) => Number.isFinite(v));
   if (raw.length < 14) return "";
-  const pts = movingAverage(raw, 7);
+  const pts = downsample(movingAverage(raw, 14), 40);
   const max = Math.max(...pts);
   const min = Math.min(...pts);
   if (max <= 0) return "";
   const [lo, hi] = max > min ? [min, max] : [min - 1, min + 1]; // 완전 평평하면 가운데 선
 
   const stepX = 100 / (pts.length - 1);
-  const coords = pts.map((v, i) => {
-    const y = 100 - ((v - lo) / (hi - lo)) * 100;
-    return `${(i * stepX).toFixed(2)},${y.toFixed(2)}`;
-  });
+  const xy = pts.map((v, i) => [i * stepX, 100 - ((v - lo) / (hi - lo)) * 100]);
+  const line = smoothPath(xy);
   return `
     <svg class="branch-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      <polygon points="0,100 ${coords.join(" ")} 100,100" />
-      <polyline points="${coords.join(" ")}" />
+      <path class="spark-area" d="${line} L 100 100 L 0 100 Z" />
+      <path class="spark-line" d="${line}" />
     </svg>`;
+}
+
+// 구간 평균으로 점 개수를 줄인다(맨 끝 점은 살린다)
+function downsample(values, target) {
+  if (values.length <= target) return values;
+  const size = values.length / target;
+  return Array.from({ length: target }, (_, i) => {
+    const slice = values.slice(Math.floor(i * size), Math.max(Math.floor((i + 1) * size), Math.floor(i * size) + 1));
+    return slice.reduce((sum, v) => sum + v, 0) / slice.length;
+  });
+}
+
+/* Catmull-Rom 스플라인을 3차 베지어로 옮긴 것.
+   점을 모두 지나가면서 접선이 이어져, 꺾임 없이 매끄럽게 이어진다. */
+function smoothPath(points) {
+  if (points.length < 2) return "";
+  const at = (i) => points[Math.min(Math.max(i, 0), points.length - 1)];
+  let d = `M ${points[0][0].toFixed(2)} ${points[0][1].toFixed(2)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [p0, p1, p2, p3] = [at(i - 1), at(i), at(i + 1), at(i + 2)];
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += ` C ${c1[0].toFixed(2)} ${c1[1].toFixed(2)}, ${c2[0].toFixed(2)} ${c2[1].toFixed(2)}, ${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`;
+  }
+  return d;
 }
 
 // 앞쪽 구간은 창이 모자라므로 있는 값까지만 평균낸다(길이 유지)
@@ -1539,17 +1573,17 @@ function toFiniteNumber(v) {
 }
 
 /**
- * 지점 한 곳의 최근 3개월 일별 실적 (바리스 매출 캘린더와 같은 소스).
+ * 지점 한 곳의 최근 6개월 일별 실적 (바리스 매출 캘린더와 같은 소스).
  * GET /analysis/sales/calendar/{branchID}/{YYYYMM}
  *   payload.data[{ date: "YYYYMMDD", tot_sell_today, tot_refund_today, weather }]
  *
- * 세 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
+ * 여섯 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
  */
 async function barisFetchDailySeries(branchID, token) {
   const now = new Date();
   const ymKey = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}`;
-  // 이번 달 포함 최근 3개월 (오래된 달 → 최근 달 순)
-  const months = [2, 1, 0].map((back) => new Date(now.getFullYear(), now.getMonth() - back, 1));
+  // 이번 달 포함 최근 6개월 (오래된 달 → 최근 달 순)
+  const months = [5, 4, 3, 2, 1, 0].map((back) => new Date(now.getFullYear(), now.getMonth() - back, 1));
 
   const byMonth = await Promise.all(months.map((d) => barisFetchMonthDays(branchID, ymKey(d), token)));
   const last = byMonth[byMonth.length - 2] || [];

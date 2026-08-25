@@ -360,17 +360,18 @@ input, select {
   height: 30%;
   pointer-events: none;
 }
-.branch-spark polygon { fill: rgba(41, 111, 247, 0.09); }
-.branch-spark polyline {
+.branch-spark .spark-area { fill: rgba(41, 111, 247, 0.09); }
+.branch-spark .spark-line {
   fill: none;
   stroke: rgba(41, 111, 247, 0.28);
   stroke-width: 1.5;
+  stroke-linecap: round;
   vector-effect: non-scaling-stroke;
 }
-.branch-card.idle .branch-spark polygon,
-.branch-card.nodata .branch-spark polygon { fill: rgba(120, 126, 135, 0.10); }
-.branch-card.idle .branch-spark polyline,
-.branch-card.nodata .branch-spark polyline { stroke: rgba(120, 126, 135, 0.25); }
+.branch-card.idle .branch-spark .spark-area,
+.branch-card.nodata .branch-spark .spark-area { fill: rgba(120, 126, 135, 0.10); }
+.branch-card.idle .branch-spark .spark-line,
+.branch-card.nodata .branch-spark .spark-line { stroke: rgba(120, 126, 135, 0.25); }
 
 /* 배경 위로 내용이 올라오게 */
 .branch-card-head,
@@ -430,12 +431,13 @@ input, select {
   letter-spacing: 0;
 }
 
-/* 주문·제조·판매 — 한 줄로 묶어 카드를 조용하게 */
+/* 주문·제조 — 한 줄로 묶어 카드를 조용하게. 판매 알약은 오른쪽 끝에 */
 .branch-card-foot {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-top: 14px;
   font-size: 13px;
   font-weight: 500;
@@ -443,14 +445,47 @@ input, select {
   font-variant-numeric: tabular-nums;
 }
 
+.branch-foot-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .branch-card-foot b {
   font-weight: 700;
   color: #3d4048;
 }
 
-.branch-card-foot b.short { color: #d92d20; }
-.branch-foot-sub { color: #9aa1ab; }
 .branch-foot-dot { color: #c3c9d1; }
+
+/* 판매 상태 알약 — 품절이 있으면 빨간 배경 */
+.branch-sale {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5059;
+  white-space: nowrap;
+}
+
+.branch-sale b { color: #3d4048; }
+
+.branch-sale.short {
+  background: #d92d20;
+  color: #ffffff;
+}
+
+.branch-sale.short b { color: #ffffff; }
+
+.branch-sale-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.82);
+}
 
 /* 지난달 대비(이번 달 예상 기준) 배지 — 오늘 매출 옆 */
 .branch-month {
