@@ -238,6 +238,29 @@ input, select {
   font-size: 13px;
 }
 
+/* ───────── 오늘 날짜 · 날씨 ───────── */
+.today-card {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px clamp(14px, 1.6vw, 20px);
+}
+
+.today-date {
+  font-size: 20px;
+  font-weight: 700;
+  color: #17191c;
+}
+
+.today-weather {
+  font-size: 15px;
+  font-weight: 500;
+  color: #4b5059;
+}
+
+.today-weather[hidden] { display: none; }
+
 /* ───────── 지점 운영 현황 (바리스 홈 표기와 동일) ───────── */
 .status-card {
   padding: clamp(14px, 1.6vw, 20px);

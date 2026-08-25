@@ -46,7 +46,6 @@ const ui = {
   filterEnd: null,      // "YYYY-MM"
   sortKey: "avgRevenue",
   sortDir: "desc",
-  selectedStoreId: null,
   barisMode: "import",  // "import"(매출 전체 가져오기) | "sync"(로그인 후 클라우드 최신만)
 };
 
@@ -471,12 +470,6 @@ function renderLocked() {
   if (stb) stb.innerHTML = `<tr><td colspan="${STORE_COLUMNS.length}" class="empty-state">로그인이 필요합니다. 우측 상단 "로그인"을 눌러주세요.</td></tr>`;
   const stf = document.getElementById("store-tfoot");
   if (stf) stf.innerHTML = "";
-  const mtb = document.getElementById("monthly-tbody");
-  if (mtb) mtb.innerHTML = '<tr><td colspan="8" class="empty-state">로그인이 필요합니다.</td></tr>';
-  const mtf = document.getElementById("monthly-tfoot");
-  if (mtf) mtf.innerHTML = "";
-  const sel = document.getElementById("monthly-store-select");
-  if (sel) sel.innerHTML = "";
   ["chart-period", "chart-trend-period"].forEach((id) => {
     const cp = document.getElementById(id);
     if (cp) cp.textContent = "";
@@ -498,8 +491,6 @@ function renderAll() {
   renderChart(startYM, endYM);
   renderTrendChart(startYM, endYM);
   renderStoreTable(startYM, endYM);
-  renderStoreSelect();
-  renderMonthlyTable();
 
   document.getElementById("chart-period").textContent =
     state.stores.length === 0 ? "" : `${startYM} ~ ${endYM}`;
@@ -512,7 +503,6 @@ function logout() {
   state.stores = [];
   state.monthly = [];
   state.updatedAt = 0;
-  ui.selectedStoreId = null;
   renderAll();
   showToast("로그아웃되었습니다.");
 }
@@ -571,7 +561,38 @@ async function refreshBranchStatus() {
   renderBranchStatus();
 }
 
+// 바리스 매출 캘린더가 주는 날씨 문자열 → 이모지
+const WEATHER_ICON = {
+  "맑음": "☀️",
+  "구름많음": "⛅",
+  "흐림": "☁️",
+  "비": "🌧️",
+  "비/눈": "🌨️",
+  "눈": "❄️",
+  "소나기": "🌦️",
+};
+
+// 맨 위 줄: 오늘 날짜 + 날씨(지점 캘린더에서 받은 값 중 첫 번째)
+function renderToday() {
+  const dateEl = document.getElementById("today-date");
+  if (dateEl) {
+    const d = new Date();
+    const dow = ["일", "월", "화", "수", "목", "금", "토"][d.getDay()];
+    dateEl.textContent = `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${dow})`;
+  }
+
+  const wEl = document.getElementById("today-weather");
+  if (!wEl) return;
+  const weather = (branchStatusSummary?.branches || [])
+    .map((b) => b.todayWeather)
+    .find(Boolean);
+  wEl.hidden = !weather;
+  if (weather) wEl.textContent = `${WEATHER_ICON[weather] || "🌤️"} ${weather}`;
+}
+
 function renderBranchStatus() {
+  renderToday();
+
   const card = document.getElementById("branch-status-card");
   if (!card) return;
   const s = branchStatusSummary;
@@ -1253,28 +1274,6 @@ function updateSortHeaders() {
   });
 }
 
-/* ============================================================
- *  월별 실적 테이블
- * ============================================================ */
-function renderStoreSelect() {
-  const sel = document.getElementById("monthly-store-select");
-  if (state.stores.length === 0) {
-    sel.innerHTML = '<option value="">— 등록된 지점 없음 —</option>';
-    ui.selectedStoreId = null;
-    return;
-  }
-
-  // 지점 상세 테이블과 동일한 정렬 순서
-  const sorted = getSortedStoreRows(ui.filterStart, ui.filterEnd).map((r) => r.store);
-
-  if (!ui.selectedStoreId || !sorted.find((s) => s.id === ui.selectedStoreId)) {
-    ui.selectedStoreId = sorted[0].id;
-  }
-  sel.innerHTML = sorted
-    .map((s) => `<option value="${s.id}" ${s.id === ui.selectedStoreId ? "selected" : ""}>${escapeHtml(s.name)}</option>`)
-    .join("");
-}
-
 // 해당 연월의 달력상 일수 (예: 2026-04 → 30)
 function daysInYearMonth(ym) {
   const [y, mo] = ym.split("-").map(Number);
@@ -1296,66 +1295,6 @@ function defaultOperatingDays(store, ym) {
 function getOperatingDays(store, m) {
   if (m.operatingDays != null && m.operatingDays !== "") return Number(m.operatingDays);
   return defaultOperatingDays(store, m.yearMonth);
-}
-
-function renderMonthlyTable() {
-  const tbody = document.getElementById("monthly-tbody");
-  const tfoot = document.getElementById("monthly-tfoot");
-
-  const store = state.stores.find((s) => s.id === ui.selectedStoreId);
-  if (!store) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">등록된 지점이 없습니다.</td></tr>';
-    tfoot.innerHTML = "";
-    return;
-  }
-
-  const rows = getMonthlyForStore(store.id);
-  if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">해당 지점의 월별 실적이 없습니다. 우측 상단 "업데이트"로 바리스에서 가져오세요.</td></tr>';
-    tfoot.innerHTML = "";
-    return;
-  }
-
-  let totalOpDays = 0;
-  tbody.innerHTML = rows.map((m) => {
-    const opProfit = (m.revenue || 0) * 0.9 * 0.1;  // 운영수익 = 매출 × 90% × 10% (= 9%)
-    const payout = (m.revenue || 0) * 0.9 * 0.2; // 투자자 회수금 = 매출 × 90% × 회수비율(20%)
-    const monthDays = daysInYearMonth(m.yearMonth);
-    const opDays = getOperatingDays(store, m);
-    totalOpDays += opDays;
-    return `
-      <tr data-month-key="${store.id}|${m.yearMonth}">
-        <td><span class="cell-editable" data-edit="monthly" data-field="yearMonth" data-store-id="${store.id}" data-key="${m.yearMonth}" data-input-type="month">${m.yearMonth}</span></td>
-        <td class="num cell-readonly">${monthDays}일</td>
-        <td class="num"><span class="cell-editable" data-edit="monthly" data-field="operatingDays" data-store-id="${store.id}" data-key="${m.yearMonth}" data-input-type="number">${opDays}</span>일</td>
-        <td class="num"><span class="cell-editable" data-edit="monthly" data-field="revenue" data-store-id="${store.id}" data-key="${m.yearMonth}" data-input-type="number">${formatCurrency(m.revenue)}</span></td>
-        <td class="num"><span class="cell-editable" data-edit="monthly" data-field="customers" data-store-id="${store.id}" data-key="${m.yearMonth}" data-input-type="number">${m.customers ? formatNumber(m.customers) : "-"}</span></td>
-        <td class="num cell-readonly">${formatCurrency(payout)}</td>
-        <td class="num cell-readonly accent" style="color: var(--accent);">${formatCurrency(opProfit)}</td>
-        <td class="col-action">
-          <button class="btn-icon" data-delete-month="${store.id}|${m.yearMonth}" title="월 삭제">×</button>
-        </td>
-      </tr>
-    `;
-  }).join("");
-
-  const totalRev = rows.reduce((s, m) => s + (m.revenue || 0), 0);
-  const totalCustomers = rows.reduce((s, m) => s + (Number(m.customers) || 0), 0);
-  const totalPayout = totalRev * 0.9 * 0.2; // 회수금 = 매출 × 90% × 회수비율(20%)
-  const totalOp = totalRev * 0.9 * 0.1;     // 운영수익 = 매출 × 90% × 10%
-
-  tfoot.innerHTML = `
-    <tr>
-      <td>합계</td>
-      <td></td>
-      <td class="num">${totalOpDays}일</td>
-      <td class="num">${formatCurrency(totalRev)}</td>
-      <td class="num">${totalCustomers > 0 ? formatNumber(totalCustomers) : "-"}</td>
-      <td class="num">${formatCurrency(totalPayout)}</td>
-      <td class="num" style="color: var(--accent);">${formatCurrency(totalOp)}</td>
-      <td></td>
-    </tr>
-  `;
 }
 
 /* ============================================================
@@ -1380,17 +1319,6 @@ function startEditing(cell) {
     const store = state.stores.find((s) => s.id === cell.dataset.id);
     if (!store) return;
     originalValue = store[field];
-  } else if (editKind === "monthly") {
-    const m = state.monthly.find(
-      (x) => x.storeId === cell.dataset.storeId && x.yearMonth === cell.dataset.key
-    );
-    if (!m) return;
-    originalValue = m[field];
-    // 실제 운영일을 아직 입력 안 했으면 현재 계산값을 편집 초기값으로 사용
-    if (field === "operatingDays" && (originalValue == null || originalValue === "")) {
-      const store = state.stores.find((s) => s.id === cell.dataset.storeId);
-      if (store) originalValue = getOperatingDays(store, m);
-    }
   }
 
   if (inputType === "number") {
@@ -1467,22 +1395,6 @@ function applyEdit(editKind, cell, field, newValue) {
     // 임대료처럼 한 번에 여러 필드를 바꾸는 편집(금액/비율 전환)
     if (newValue && typeof newValue === "object") Object.assign(store, newValue);
     else store[field] = newValue;
-  } else if (editKind === "monthly") {
-    const m = state.monthly.find(
-      (x) => x.storeId === cell.dataset.storeId && x.yearMonth === cell.dataset.key
-    );
-    if (!m) return;
-    if (field === "yearMonth") {
-      const dup = state.monthly.find(
-        (x) => x.storeId === m.storeId && x.yearMonth === newValue && x !== m
-      );
-      if (dup) {
-        showToast("이미 같은 연월의 데이터가 있습니다.");
-        renderAll();
-        return;
-      }
-    }
-    m[field] = newValue;
   }
   saveToStorage();
   renderAll();
@@ -1496,14 +1408,6 @@ function toggleStoreType(id) {
   if (!store) return;
   const current = getStoreType(store);
   store.type = current === STORE_TYPE_DIRECT ? STORE_TYPE_OWNER : STORE_TYPE_DIRECT;
-  saveToStorage();
-  renderAll();
-}
-
-function deleteMonth(storeId, yearMonth) {
-  state.monthly = state.monthly.filter(
-    (m) => !(m.storeId === storeId && m.yearMonth === yearMonth)
-  );
   saveToStorage();
   renderAll();
 }
@@ -1684,11 +1588,13 @@ async function barisFetchDailySeries(branchID, token) {
   const ydayKey = `${ymKey(yday)}${pad(yday.getDate())}`;
   const ydayRow = [...last, ...cur].find((r) => r.date === ydayKey);
 
+  const todayKey = `${ymKey(now)}${pad(now.getDate())}`;
   return {
     series: [...last, ...cur].map((r) => r.orders),
     monthChange: monthOverMonthChange(last, cur, now),
     ydayOrders: ydayRow?.orders,
     ydayProduced: ydayRow?.produced,
+    todayWeather: cur.find((r) => r.date === todayKey)?.weather || undefined,
   };
 }
 
@@ -1699,6 +1605,7 @@ async function barisFetchMonthDays(branchID, yyyymm, token) {
       date: String(r.date),
       orders: toFiniteNumber(r.order_cnt_today) ?? 0,
       produced: toFiniteNumber(r.product_cnt_today) ?? 0,
+      weather: r.weather || "",
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -1873,8 +1780,6 @@ function mergeBarisResult(result) {
       investorPayout: 0,
     });
   }
-
-  if (!ui.selectedStoreId) ui.selectedStoreId = branchID;
 }
 
 /* ============================================================
@@ -2131,11 +2036,6 @@ function bindEvents() {
   document.getElementById("btn-save").addEventListener("click", cloudSave);
 
 
-  document.getElementById("monthly-store-select").addEventListener("change", (e) => {
-    ui.selectedStoreId = e.target.value;
-    renderMonthlyTable();
-  });
-
   // 정렬 (헤더가 매 렌더마다 재생성되므로 위임 방식으로 바인딩)
   document.getElementById("store-thead").addEventListener("click", (e) => {
     const th = e.target.closest("th[data-sort]");
@@ -2148,17 +2048,10 @@ function bindEvents() {
       ui.sortDir = "asc";
     }
     renderStoreTable(ui.filterStart, ui.filterEnd);
-    renderStoreSelect();
   });
 
-  // 삭제 + 타입 토글 위임
+  // 타입 토글 위임
   document.body.addEventListener("click", (e) => {
-    const dMonth = e.target.closest("[data-delete-month]");
-    if (dMonth) {
-      const [storeId, ym] = dMonth.dataset.deleteMonth.split("|");
-      deleteMonth(storeId, ym);
-      return;
-    }
     const tChip = e.target.closest("[data-toggle-type]");
     if (tChip) {
       toggleStoreType(tChip.dataset.toggleType);
@@ -2224,11 +2117,8 @@ function escapeHtml(s) {
 /* ============================================================
  *  부트
  * ============================================================ */
-// 데이터가 통째로 바뀐 뒤(클라우드 반영 등) 선택 지점/필터를 보정하고 다시 그림
+// 데이터가 통째로 바뀐 뒤(클라우드 반영 등) 필터를 보정하고 다시 그림
 function refreshAfterDataChange() {
-  if (!ui.selectedStoreId || !state.stores.find((s) => s.id === ui.selectedStoreId)) {
-    ui.selectedStoreId = state.stores[0] ? state.stores[0].id : null;
-  }
   const def = getDefaultFilter();
   ui.filterStart = def.start;
   ui.filterEnd = def.end;
@@ -2242,10 +2132,10 @@ function refreshAfterDataChange() {
 function init() {
   // 초기 데이터 없음(빈 상태로 시작). 데이터는 "업데이트"/직접 입력/클라우드에서 가져옴.
   loadFromStorage();
-  if (state.stores.length > 0) ui.selectedStoreId = state.stores[0].id;
 
   initFilters();
   bindEvents();
+  renderToday(); // 날짜는 로그인 전에도 바로 보인다
   renderAll();
 
   // 클라우드 공유 데이터를 불러와(최근 저장본 우선) 모든 기기에서 공통 표시

@@ -25,22 +25,10 @@
   </header>
 
   <main class="container">
-    <!-- 기간 필터 -->
-    <section class="card filter-card">
-      <div class="filter-row">
-        <label>
-          <span>시작</span>
-          <input type="month" id="filter-start" />
-        </label>
-        <label>
-          <span>종료</span>
-          <input type="month" id="filter-end" />
-        </label>
-        <button id="btn-all-period" class="btn btn-ghost">전체 기간</button>
-        <button id="btn-recent-12" class="btn btn-ghost">최근 12개월</button>
-        <button id="btn-recent-3" class="btn btn-ghost">최근 3개월</button>
-        <button id="btn-recent-1" class="btn btn-ghost">최근 1개월</button>
-      </div>
+    <!-- 오늘 날짜 · 날씨 -->
+    <section class="card today-card">
+      <span class="today-date" id="today-date"></span>
+      <span class="today-weather" id="today-weather" hidden></span>
     </section>
 
     <!-- 지점 운영 현황 (바리스 홈과 동일한 표기) -->
@@ -63,6 +51,24 @@
         </div>
       </div>
       <div class="status-bars" id="status-bars"></div>
+    </section>
+
+    <!-- 기간 필터 -->
+    <section class="card filter-card">
+      <div class="filter-row">
+        <label>
+          <span>시작</span>
+          <input type="month" id="filter-start" />
+        </label>
+        <label>
+          <span>종료</span>
+          <input type="month" id="filter-end" />
+        </label>
+        <button id="btn-all-period" class="btn btn-ghost">전체 기간</button>
+        <button id="btn-recent-12" class="btn btn-ghost">최근 12개월</button>
+        <button id="btn-recent-3" class="btn btn-ghost">최근 3개월</button>
+        <button id="btn-recent-1" class="btn btn-ghost">최근 1개월</button>
+      </div>
     </section>
 
     <!-- KPI -->
@@ -125,36 +131,6 @@
       </div>
     </section>
 
-    <!-- 월별 실적 입력 -->
-    <section class="card">
-      <div class="card-head">
-        <h2>월별 실적 입력</h2>
-        <div class="head-controls">
-          <label class="select-label">
-            <span>지점 선택</span>
-            <select id="monthly-store-select"></select>
-          </label>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table class="data-table" id="monthly-table">
-          <thead>
-            <tr>
-              <th>연월</th>
-              <th>운영일수</th>
-              <th>실제 운영일</th>
-              <th>매출</th>
-              <th>객수</th>
-              <th>투자자 회수금</th>
-              <th>운영수익 (본사)</th>
-              <th class="col-action"></th>
-            </tr>
-          </thead>
-          <tbody id="monthly-tbody"></tbody>
-          <tfoot id="monthly-tfoot"></tfoot>
-        </table>
-      </div>
-    </section>
   </main>
 
   <!-- 바리스 임포트 모달 -->
