@@ -530,9 +530,16 @@ async function refreshBranchStatus() {
   }
   try {
     const rows = await barisFetchBranchStatus(token);
-    const mine = rows.filter((r) => r.branchName.includes(BARIS_BRAND_FILTER));
+    const mine = rows
+      .filter((r) => r.branchName.includes(BARIS_BRAND_FILTER))
+      .sort((a, b) => a.branchName.localeCompare(b.branchName, "ko"));
     const operating = mine.filter((r) => r.status === "OPERATING").length;
-    branchStatusSummary = { total: mine.length, operating, idle: mine.length - operating };
+    branchStatusSummary = {
+      total: mine.length,
+      operating,
+      idle: mine.length - operating,
+      branches: mine,
+    };
   } catch {
     branchStatusSummary = null; // 조회 실패 시 카드 자체를 감춘다(빈 값 표시 방지)
   }
@@ -551,6 +558,26 @@ function renderBranchStatus() {
   document.getElementById("status-total").textContent = `${formatNumber(s.total)}개`;
   document.getElementById("status-operating").textContent = formatNumber(s.operating);
   document.getElementById("status-idle").textContent = formatNumber(s.idle);
+
+  // 지점 하나당 사각형 하나 — 바리스 홈의 로봇 타일과 같은 표기
+  const bars = document.getElementById("status-bars");
+  if (!bars) return;
+  bars.innerHTML = (s.branches || []).map((b) => {
+    const cls = b.status === "OPERATING" ? "operating" : b.status === "NO_DATA" ? "nodata" : "idle";
+    const label = b.status === "OPERATING" ? "운영중" : b.status === "NO_DATA" ? "데이터 없음" : "미운영";
+    const tip = `${shortStoreName(b.branchName)} · ${label}\n총 가동률 ${b.totalRate}%\n운영중 ${formatMinutes(b.runTime)} / 미운영 ${formatMinutes(b.downTime)}`;
+    return `<div class="status-bar ${cls}" title="${escapeHtml(tip)}"></div>`;
+  }).join("");
+}
+
+// 분 → "N시간 M분" (바리스 툴팁 표기와 동일)
+function formatMinutes(min) {
+  const total = Math.max(0, Math.floor(Number(min) || 0));
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (h <= 0) return `${m}분`;
+  if (m <= 0) return `${h}시간`;
+  return `${h}시간 ${m}분`;
 }
 
 function renderKPI(startYM, endYM) {
@@ -1505,6 +1532,9 @@ async function barisFetchBranchStatus(token) {
     branchId: x.branch_id || x.brnach_id || "",
     branchName: x.branch_name || "",
     status: x.status || "NO_DATA",
+    totalRate: Number(x.total_rate) || 0,
+    runTime: Number(x.run_time) || 0,   // 분
+    downTime: Number(x.down_time) || 0, // 분
   }));
 }
 

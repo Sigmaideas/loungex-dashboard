@@ -290,6 +290,33 @@ input, select {
   font-variant-numeric: tabular-nums;
 }
 
+/* 지점 하나당 사각형 하나 — 바리스는 25칸 그리드에 정사각 타일 */
+.status-bars {
+  display: grid;
+  grid-template-columns: repeat(25, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  background: #ffffff;
+  border-radius: 12px;
+}
+
+.status-bar {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  border: 1px solid #9ec5fe;
+  box-sizing: border-box;
+}
+
+.status-bar.operating { background: #68adfe; }
+.status-bar.idle { background: #e0eeff; }
+.status-bar.nodata { background: #f8f9fa; border: none; }
+
+@media (max-width: 760px) {
+  .status-bars { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+}
+
 /* ───────── KPI ───────── */
 .kpi-grid {
   display: grid;
