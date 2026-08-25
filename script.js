@@ -480,9 +480,6 @@ function renderAll() {
   const startYM = ui.filterStart;
   const endYM = ui.filterEnd;
 
-  const matSel = document.getElementById("material-rate-select");
-  if (matSel) matSel.value = String(state.materialRate ?? 0.3);
-
   renderKPI(startYM, endYM);
   renderChart(startYM, endYM);
   renderTrendChart(startYM, endYM);
@@ -1902,13 +1899,6 @@ function bindEvents() {
 
   document.getElementById("btn-add-store").addEventListener("click", addStore);
   document.getElementById("btn-add-month").addEventListener("click", addMonth);
-
-  // 식자재 비율 변경(전 지점 공통)
-  document.getElementById("material-rate-select").addEventListener("change", (e) => {
-    state.materialRate = parseFloat(e.target.value);
-    saveToStorage();
-    renderAll();
-  });
 
   document.getElementById("monthly-store-select").addEventListener("change", (e) => {
     ui.selectedStoreId = e.target.value;
