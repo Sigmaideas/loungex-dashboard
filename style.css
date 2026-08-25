@@ -348,8 +348,8 @@ input, select {
 .branch-card.operating .branch-metric-value { color: #ffffff; }
 .branch-card.operating .branch-metric-sub,
 .branch-card.operating .branch-metric-unit { color: rgba(255, 255, 255, 0.75); }
-/* 품절 표시는 파란 배경에서 빨강이 묻히므로 밝은 톤으로 */
-.branch-card.operating .branch-metric-value .short { color: #ffd3cf; }
+/* 품절 표시 — 파란 배경에서도 빨강으로 읽히도록 채도 높은 순색 */
+.branch-card.operating .branch-metric-value .short { color: #ff3b30; }
 
 .branch-card-metrics {
   display: grid;
@@ -389,7 +389,7 @@ input, select {
 }
 
 /* 주문가능 < 판매상품 → 품절이 있다는 뜻 */
-.branch-metric-value .short { color: var(--danger); }
+.branch-metric-value .short { color: #d92d20; }
 
 @media (max-width: 520px) {
   .status-bars { grid-template-columns: 1fr; }
