@@ -693,58 +693,53 @@ function renderBranchStatus() {
     const cls = b.status === "OPERATING" ? "operating" : b.status === "NO_DATA" ? "nodata" : "idle";
     // 운영중은 카드 색으로 이미 드러나므로 글자로는 예외 상태만 적는다
     const label = b.status === "OPERATING" ? "" : b.status === "NO_DATA" ? "데이터 없음" : "미운영";
-    const hasCount = Number.isFinite(b.orderable) && Number.isFinite(b.sellable);
     return `
       <div class="branch-card ${cls}">
         ${sparkline(b.series)}
         <div class="branch-card-head">
           <span class="branch-card-name">${escapeHtml(shortStoreName(b.branchName))}</span>
-          <span class="branch-card-head-right">
-            ${monthChangeMark(b.monthChange)}
-            ${label ? `<span class="branch-card-status">${label}</span>` : ""}
-          </span>
+          ${label ? `<span class="branch-card-status">${label}</span>` : ""}
         </div>
-        <div class="branch-card-metrics">
-          ${metricCell("오늘 주문 건수", b.todayOrders, "건", b.ydayOrders)}
-          ${metricCell("오늘 음료 제조 수량", b.todayProduced, "개", b.ydayProduced)}
-          ${metricCell("오늘 결제금액", b.todayAmount, "원")}
-          <div class="branch-metric">
-            <div class="branch-metric-label">주문 가능 / 판매 상품</div>
-            <div class="branch-metric-value">
-              ${hasCount
-                ? `<span class="${b.orderable < b.sellable ? "short" : ""}">${formatNumber(b.orderable)}</span>` +
-                  `<span class="branch-metric-sub"> / ${formatNumber(b.sellable)}</span>` +
-                  `<span class="branch-metric-unit">개</span>`
-                : `<span class="branch-metric-sub">-</span>`}
-            </div>
-          </div>
+        <div class="branch-card-hero">
+          <span class="branch-hero-value">${
+            Number.isFinite(b.todayAmount) ? `${formatNumber(b.todayAmount)}<span class="branch-hero-unit">원</span>` : "-"
+          }</span>
+          ${monthChangeMark(b.monthChange)}
         </div>
+        <div class="branch-card-foot">${cardFootItems(b).join('<span class="branch-foot-dot">·</span>')}</div>
       </div>`;
   }).join("");
 }
 
-// 카드 안의 지표 한 칸 — 값이 아직 없으면 "-", 어제 값이 있으면 증감을 덧붙인다
-function metricCell(label, value, unit, yesterday) {
-  const has = Number.isFinite(value);
-  return `
-    <div class="branch-metric">
-      <div class="branch-metric-label">${label}</div>
-      <div class="branch-metric-value">${
-        has
-          ? `${formatNumber(value)}<span class="branch-metric-unit">${unit}</span>${trendMark(value, yesterday)}`
-          : `<span class="branch-metric-sub">-</span>`
-      }</div>
-    </div>`;
+/* 카드 아래 한 줄 — 오늘 주문·제조·상품 수. 라벨이 길어 카드가 복잡해지므로
+   "오늘"은 큰 숫자(오늘 매출)에서 한 번만 말하고 여기서는 짧은 말만 쓴다. */
+function cardFootItems(b) {
+  const items = [];
+  if (Number.isFinite(b.todayOrders)) {
+    items.push(`<span>주문 <b>${formatNumber(b.todayOrders)}</b>건</span>`);
+  }
+  if (Number.isFinite(b.todayProduced)) {
+    items.push(`<span>제조 <b>${formatNumber(b.todayProduced)}</b>잔</span>`);
+  }
+  if (Number.isFinite(b.orderable) && Number.isFinite(b.sellable)) {
+    const short = b.orderable < b.sellable ? " short" : "";
+    items.push(
+      `<span>판매 <b class="${short.trim()}">${formatNumber(b.orderable)}</b>` +
+      `<span class="branch-foot-sub">/${formatNumber(b.sellable)}</span></span>`
+    );
+  }
+  return items; // 값이 하나도 없으면 상태 칩("데이터 없음")만 남기고 비워 둔다
 }
 
 /* 지난달 대비 매출 변화율 — 이번 달은 한 달 예상치로 환산해 비교한다 */
 function monthChangeMark(pct) {
   if (!Number.isFinite(pct)) return "";
   const rounded = Math.round(pct);
-  if (rounded === 0) return `<span class="branch-month flat">지난달 대비 ±0%</span>`;
+  const title = "지난달 대비 (이번 달은 한 달 예상치 기준)";
+  if (rounded === 0) return `<span class="branch-month flat" title="${title}">±0%</span>`;
   const dir = rounded > 0 ? "up" : "down";
   const arrow = rounded > 0 ? "▲" : "▼";
-  return `<span class="branch-month ${dir}">지난달 대비 ${arrow}${Math.abs(rounded)}%</span>`;
+  return `<span class="branch-month ${dir}" title="${title}">${arrow}${Math.abs(rounded)}%</span>`;
 }
 
 /* 카드 배경 스파크라인 — 최근 6개월 일별 매출의 7일 이동평균.
@@ -779,16 +774,6 @@ function movingAverage(values, window) {
     const slice = values.slice(from, i + 1);
     return slice.reduce((sum, v) => sum + v, 0) / slice.length;
   });
-}
-
-/* 어제 대비 증감 — 오늘은 지금까지 누적, 어제는 하루 전체라 오전에는 대체로 ▼ 로 보인다 */
-function trendMark(today, yesterday) {
-  if (!Number.isFinite(yesterday)) return "";
-  const diff = today - yesterday;
-  if (diff === 0) return `<span class="branch-trend flat">±0</span>`;
-  const dir = diff > 0 ? "up" : "down";
-  const arrow = diff > 0 ? "▲" : "▼";
-  return `<span class="branch-trend ${dir}">${arrow} ${formatNumber(Math.abs(diff))}</span>`;
 }
 
 function renderKPI(startYM, endYM) {
@@ -1556,10 +1541,9 @@ function toFiniteNumber(v) {
 /**
  * 지점 한 곳의 최근 6개월 일별 실적 (바리스 매출 캘린더와 같은 소스).
  * GET /analysis/sales/calendar/{branchID}/{YYYYMM}
- *   payload.data[{ date: "YYYYMMDD", order_cnt_today, product_cnt_today }]
+ *   payload.data[{ date: "YYYYMMDD", tot_sell_today, tot_refund_today, weather }]
  *
  * 여섯 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
- * 어제 수치도 여기서 뽑는다(오늘이 1일이면 지난달 데이터에 들어 있다).
  */
 async function barisFetchDailySeries(branchID, token) {
   const now = new Date();
@@ -1572,16 +1556,10 @@ async function barisFetchDailySeries(branchID, token) {
   const cur = byMonth[byMonth.length - 1] || [];
   const all = byMonth.flat();
 
-  const yday = new Date(now);
-  yday.setDate(yday.getDate() - 1);
-  const ydayRow = all.find((r) => r.date === `${ymKey(yday)}${pad(yday.getDate())}`);
-
   const todayKey = `${ymKey(now)}${pad(now.getDate())}`;
   return {
     series: all.map((r) => r.sales),
     monthChange: monthOverMonthChange(last, cur, now),
-    ydayOrders: ydayRow?.orders,
-    ydayProduced: ydayRow?.produced,
     todayWeather: cur.find((r) => r.date === todayKey)?.weather || undefined,
   };
 }
@@ -1593,8 +1571,6 @@ async function barisFetchMonthDays(branchID, yyyymm, token) {
       date: String(r.date),
       // 매출은 환불을 뺀 순매출 (지점 상세의 월 매출과 같은 기준)
       sales: Math.max(0, (toFiniteNumber(r.tot_sell_today) ?? 0) - (toFiniteNumber(r.tot_refund_today) ?? 0)),
-      orders: toFiniteNumber(r.order_cnt_today) ?? 0,
-      produced: toFiniteNumber(r.product_cnt_today) ?? 0,
       weather: r.weather || "",
     }))
     .sort((a, b) => a.date.localeCompare(b.date));

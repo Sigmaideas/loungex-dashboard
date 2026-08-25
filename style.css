@@ -344,7 +344,8 @@ input, select {
 .branch-card {
   position: relative;
   overflow: hidden;
-  padding: 20px 22px;
+  min-height: 158px; /* 배경 그래프가 글씨와 겹치지 않을 만큼의 아래 여백 */
+  padding: 20px 22px 26px;
   border-radius: 14px;
   box-sizing: border-box;
 }
@@ -356,7 +357,7 @@ input, select {
   right: 0;
   bottom: 0;
   width: 100%;
-  height: 38%;
+  height: 30%;
   pointer-events: none;
 }
 .branch-spark polygon { fill: rgba(41, 111, 247, 0.09); }
@@ -373,7 +374,8 @@ input, select {
 
 /* 배경 위로 내용이 올라오게 */
 .branch-card-head,
-.branch-card-metrics { position: relative; }
+.branch-card-hero,
+.branch-card-foot { position: relative; }
 
 /* 운영중은 연한 파란 박스, 미운영·데이터없음은 회색 계열 */
 .branch-card.operating { background: #dfebff; }
@@ -385,11 +387,10 @@ input, select {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 16px;
 }
 
 .branch-card-name {
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 700;
   color: #17191c;
   overflow: hidden;
@@ -397,24 +398,64 @@ input, select {
   white-space: nowrap;
 }
 
-.branch-card-head-right {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 10px;
-  white-space: nowrap;
-}
-
 .branch-card-status {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: #8c919b;
   white-space: nowrap;
 }
 
-/* 지난달 대비 배지 */
-.branch-month {
-  font-size: 12px;
+/* 오늘 매출 — 카드에서 유일하게 큰 숫자 */
+.branch-card-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.branch-hero-value {
+  font-size: 30px;
+  font-weight: 700;
+  color: #17191c;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+
+.branch-hero-unit {
+  margin-left: 2px;
+  font-size: 15px;
   font-weight: 600;
+  color: #787e87;
+  letter-spacing: 0;
+}
+
+/* 주문·제조·판매 — 한 줄로 묶어 카드를 조용하게 */
+.branch-card-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.branch-card-foot b {
+  font-weight: 700;
+  color: #3d4048;
+}
+
+.branch-card-foot b.short { color: #d92d20; }
+.branch-foot-sub { color: #9aa1ab; }
+.branch-foot-dot { color: #c3c9d1; }
+
+/* 지난달 대비(이번 달 예상 기준) 배지 — 오늘 매출 옆 */
+.branch-month {
+  font-size: 13px;
+  font-weight: 700;
   white-space: nowrap;
 }
 .branch-month.up { color: #12a150; }
@@ -423,57 +464,6 @@ input, select {
 
 /* 운영중 표시만 파란 글씨로 강조 */
 .branch-card.operating .branch-card-status { color: #296ff7; }
-
-.branch-card-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
-}
-
-.branch-metric { min-width: 0; }
-
-.branch-metric-label {
-  font-size: 12px;
-  font-weight: 400;
-  color: #8c919b;
-  line-height: 16px;
-}
-
-.branch-metric-value {
-  margin-top: 2px;
-  font-size: 20px;
-  font-weight: 600;
-  color: #17191c;
-  line-height: 28px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* 판매상품 수·빈 값처럼 보조가 되는 숫자 */
-.branch-metric-sub { color: #787e87; }
-
-.branch-metric-unit {
-  margin-left: 2px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #787e87;
-}
-
-/* 어제 대비 증감 — 값 바로 옆 작은 글씨 */
-.branch-trend {
-  margin-left: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.branch-trend.up { color: #12a150; }
-.branch-trend.down { color: #d92d20; }
-.branch-trend.flat { color: #8c919b; }
-
-/* 주문가능 < 판매상품 → 품절이 있다는 뜻 */
-.branch-metric-value .short { color: #d92d20; }
 
 @media (max-width: 520px) {
   .status-bars { grid-template-columns: 1fr; }
