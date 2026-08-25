@@ -82,33 +82,6 @@ const formatPercent = (rate) => `${(rate * 100).toFixed(1)}%`;
  * 수익률 표시: 100% 미만이면 100에서 부족한 만큼 "-N%"로 빨간 표시.
  * 데이터 없음(투자금=0 등)이면 "-".
  */
-/**
- * 회수율 가로 막대: 0~200% 스케일, 100% 기준선이 중앙에 위치.
- * 100% 이상 녹색, 미만 빨간색.
- */
-function renderRecoveryBar(rate, hasInvestment) {
-  if (!hasInvestment) {
-    return '<span class="cell-readonly">-</span>';
-  }
-  const pct = rate * 100;
-  const fillWidth = Math.min(Math.max(pct, 0), 100); // 0~100% 스케일
-  const cls = rate >= 1 ? "pos" : "neg";
-  return `
-    <div class="recovery-bar" title="총 회수금액 / 총 투자금액">
-      <div class="recovery-bar-fill ${cls}" style="width:${fillWidth}%"></div>
-      <div class="recovery-bar-label">${pct.toFixed(1)}%</div>
-    </div>
-  `;
-}
-
-function formatRoiDisplay(roi, minPayout) {
-  if (!minPayout) return { text: "-", cls: "" };
-  if (roi < 1) {
-    return { text: `-${((1 - roi) * 100).toFixed(1)}%`, cls: "neg" };
-  }
-  return { text: `+${((roi - 1) * 100).toFixed(1)}%`, cls: "pos" };
-}
-
 const todayISO = () => {
   const d = new Date();
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -1033,15 +1006,8 @@ const STORE_COLUMNS = [
   { label: "지점명", sort: "name" },
   { label: "오픈일", sort: "openDate" },
   { label: "운영일자", sort: "opDays" },
-  { label: "총 투자금액", sort: "totalInvestment", center: true },
-  { label: "총 회수금액", sort: "totalPayout", center: true },
-  { label: "회수율", sort: "recoveryRate", center: true },
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
-  { label: "월평균 회수금액", sort: "avgPayout", center: true },
-  { label: "수익률", sort: "roi" },
-  { label: "월 임대료", sort: "monthlyRent", center: true, title: "더블클릭 후 금액(3000000) 또는 매출 비율(10%)을 입력하세요" },
-  { label: "회사 P&L", sort: "companyPnl" },
   { label: "", action: true },
 ];
 
@@ -1054,14 +1020,6 @@ function renderStoreHead() {
     const titleAttr = c.title ? ` title="${escapeHtml(c.title)}"` : "";
     return `<th${sortAttr}${titleAttr}${cls ? ` class="${cls}"` : ""}>${escapeHtml(c.label)}</th>`;
   }).join("") + "</tr>";
-}
-
-// 임대료 셀: 비율 방식이면 계산된 금액 아래에 "매출 10%" 표시
-function renderRentCell(store, rentAmount) {
-  const rate = getRentRate(store);
-  if (rate == null) return formatCurrency(store.monthlyRent || 0);
-  const pct = Number((rate * 100).toFixed(2));
-  return `${formatCurrency(rentAmount)}<span class="cell-note">매출 ${pct}%</span>`;
 }
 
 function renderStoreTable(startYM, endYM) {
@@ -1084,70 +1042,24 @@ function renderStoreTable(startYM, endYM) {
       <td><span class="cell-editable" data-edit="store" data-field="name" data-id="${store.id}">${escapeHtml(store.name)}</span></td>
       <td><span class="cell-editable" data-edit="store" data-field="openDate" data-id="${store.id}" data-input-type="date">${store.openDate || "-"}</span></td>
       <td class="num cell-readonly">${formatNumber(m.opDays)}일</td>
-      <td class="num center"><span class="cell-editable" data-edit="store" data-field="totalInvestment" data-id="${store.id}" data-input-type="number">${formatCurrency(store.totalInvestment)}</span></td>
-      <td class="num center cell-readonly">${formatCurrency(m.totalPayoutCalculated)}</td>
-      <td class="num center cell-readonly">${renderRecoveryBar(m.recoveryRate, (store.totalInvestment || 0) > 0)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
-      <td class="num center cell-readonly ${m.avgMonthlyPayout >= m.minMonthlyPayout && m.minMonthlyPayout > 0 ? "pos" : ""}">${formatCurrency(m.avgMonthlyPayout)}</td>
-      <td class="num cell-readonly ${formatRoiDisplay(m.roi, m.minMonthlyPayout).cls}">${formatRoiDisplay(m.roi, m.minMonthlyPayout).text}</td>
-      <td class="num center"><span class="cell-editable" data-edit="store" data-field="monthlyRent" data-id="${store.id}" data-input-type="rent" title="금액(예: 3000000) 또는 매출 비율(예: 10%)을 입력하세요">${renderRentCell(store, m.monthlyRent)}</span></td>
-      <td>
-        <div class="pnl-stack">
-          <div class="pnl-line ${m.operatingProfit < 0 ? "neg" : "accent"}">
-            <span class="value">${formatCurrency(m.operatingProfit)}</span>
-          </div>
-        </div>
-      </td>
       <td class="col-action">
         <button class="btn-icon" data-delete-store="${store.id}" title="지점 삭제">×</button>
       </td>
     </tr>
   `).join("");
 
-  // 합계
-  const sum = rows.reduce((acc, r) => {
-    acc.investment += r.store.totalInvestment || 0;
-    acc.totalPayout += r.totalPayoutCalculated;
-    acc.monthlyRent += r.monthlyRent;
-    acc.monthlyLabor += r.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR;
-    acc.materialCost += r.materialCost;
-    acc.revenueAll += r.totalRevenueAll;
-    acc.payoutAll += r.totalPayoutAll;
-    acc.minPayout += r.minMonthlyPayout;
-    acc.openingProfit += r.openingProfitInRange;
-    acc.operatingProfit += r.operatingProfit;
-    acc.companyPnl += r.companyPnl;
-    acc.monthsCount += getMonthlyForStore(r.store.id).length;
-    acc.avgRevenue += r.avgMonthlyRevenue;
-    acc.avgPayout += r.avgMonthlyPayout;
-    return acc;
-  }, { investment: 0, totalPayout: 0, monthlyRent: 0, monthlyLabor: 0, materialCost: 0, revenueAll: 0, payoutAll: 0, minPayout: 0, openingProfit: 0, operatingProfit: 0, companyPnl: 0, monthsCount: 0, avgRevenue: 0, avgPayout: 0 });
-
-  const avgRevenueAll = sum.avgRevenue;
-  // 지점별 회수비율이 다르므로 합계는 지점별 평균 회수금액을 합산
-  const avgPayoutAll = sum.avgPayout;
-  const aggregateMinPayout = sum.investment / 60;
-  const avgRoi = aggregateMinPayout > 0 ? avgPayoutAll / aggregateMinPayout : 0;
+  // 합계 — 남은 열(월평균/일평균 매출)만 집계
+  const avgRevenueAll = rows.reduce((acc, r) => acc + r.avgMonthlyRevenue, 0);
 
   tfoot.innerHTML = `
     <tr>
       <td>합계</td>
       <td></td>
       <td></td>
-      <td class="num center">${formatCurrency(sum.investment)}</td>
-      <td class="num center">${formatCurrency(sum.totalPayout)}</td>
-      <td class="num center">${renderRecoveryBar(sum.investment > 0 ? sum.totalPayout / sum.investment : 0, sum.investment > 0)}</td>
       <td class="num center">${formatCurrency(avgRevenueAll * 0.9)}</td>
       <td class="num center">${formatCurrency(avgRevenueAll * 0.9 / 30)}</td>
-      <td class="num center ${avgPayoutAll >= sum.minPayout / Math.max(rows.length, 1) ? "pos" : ""}">${formatCurrency(avgPayoutAll)}</td>
-      <td class="num ${formatRoiDisplay(avgRoi, aggregateMinPayout).cls}">${formatRoiDisplay(avgRoi, aggregateMinPayout).text}</td>
-      <td class="num center">${formatCurrency(sum.monthlyRent)}</td>
-      <td>
-        <div class="pnl-stack">
-          <div class="pnl-line ${sum.operatingProfit < 0 ? "neg" : "accent"}"><span class="value">${formatCurrency(sum.operatingProfit)}</span></div>
-        </div>
-      </td>
       <td></td>
     </tr>
   `;
@@ -1530,13 +1442,15 @@ async function barisGet(path, token) {
 }
 
 /**
- * 매출 조회.
- *  - 과거 월: tot_sell_month_predict (예상매출).
- *    : 0매출 일자를 비-0 일평균으로 채워 추정. 월 중간 오픈 케이스 처리.
- *  - 현재(진행 중)/미래 월: tot_sell_month - tot_refund_month (실제 누적).
- *    : 며칠 안 지난 시점에서의 과대 추정 방지.
+ * 한 달치 매출 + 객수 조회 (바리스 매출 캘린더 화면과 같은 소스).
+ *  매출
+ *   - 과거 월: tot_sell_month_predict (예상매출).
+ *     : 0매출 일자를 비-0 일평균으로 채워 추정. 월 중간 오픈 케이스 처리.
+ *   - 현재(진행 중)/미래 월: tot_sell_month - tot_refund_month (실제 누적).
+ *     : 며칠 안 지난 시점에서의 과대 추정 방지.
+ *  객수: tot_order_cnt (그 달 주문건수). 바리스 화면의 "주문건수 (평균 객단가)"와 같은 값.
  */
-async function barisFetchMonthRevenue(branchID, ym, token) {
+async function barisFetchMonthSales(branchID, ym, token) {
   const yyyymm = ym.replace("-", "");
   const j = await barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, token);
   const p = j?.payload || {};
@@ -1544,10 +1458,11 @@ async function barisFetchMonthRevenue(branchID, ym, token) {
   const refund = Number(p.tot_refund_month || 0);
   const predict = Number(p.tot_sell_month_predict || 0);
 
-  if (!isMonthInProgressOrFuture(ym) && predict > 0) {
-    return predict;
-  }
-  return Math.max(0, actual - refund);
+  const revenue = !isMonthInProgressOrFuture(ym) && predict > 0
+    ? predict
+    : Math.max(0, actual - refund);
+
+  return { revenue, customers: Math.max(0, Math.round(Number(p.tot_order_cnt) || 0)) };
 }
 
 function isMonthInProgressOrFuture(ym) {
@@ -1648,10 +1563,10 @@ async function importFromBaris({ account, password, token: presetToken, startYM,
     onProgress?.(`(${i + 1}/${targets.length}) ${branchName} 매출 조회 중...`);
     const monthResults = await runWithConcurrency(months, 6, async (ym) => {
       try {
-        const revenue = await barisFetchMonthRevenue(b.branchID, ym, branchToken);
-        return { ym, revenue };
+        const { revenue, customers } = await barisFetchMonthSales(b.branchID, ym, branchToken);
+        return { ym, revenue, customers };
       } catch {
-        return { ym, revenue: 0 };
+        return { ym, revenue: 0, customers: 0 };
       } finally {
         done++;
         if (done % 5 === 0 || done === total) {
@@ -1662,10 +1577,10 @@ async function importFromBaris({ account, password, token: presetToken, startYM,
 
     let firstYM = null;
     const monthly = [];
-    for (const { ym, revenue } of monthResults) {
+    for (const { ym, revenue, customers } of monthResults) {
       if (revenue > 0) {
         if (!firstYM || ym < firstYM) firstYM = ym;
-        monthly.push({ storeId: b.branchID, yearMonth: ym, revenue, investorPayout: 0 });
+        monthly.push({ storeId: b.branchID, yearMonth: ym, revenue, customers, investorPayout: 0 });
       }
     }
 
@@ -1704,17 +1619,26 @@ function mergeBarisResult(result) {
   }
 
   // 2) monthly: 해당 지점의 month는 매출만 갱신, investorPayout(사용자 입력)는 보존
-  const incomingByYM = new Map(monthly.map((m) => [m.yearMonth, m.revenue]));
+  const incomingByYM = new Map(monthly.map((m) => [m.yearMonth, m]));
   // 기존 항목 업데이트
   for (const m of state.monthly) {
     if (m.storeId === branchID && incomingByYM.has(m.yearMonth)) {
-      m.revenue = incomingByYM.get(m.yearMonth);
+      const incoming = incomingByYM.get(m.yearMonth);
+      m.revenue = incoming.revenue;
+      // 객수는 바리스에서 받아온 값이 있을 때만 덮어쓴다(수기 입력 보존)
+      if (incoming.customers > 0) m.customers = incoming.customers;
       incomingByYM.delete(m.yearMonth);
     }
   }
   // 신규 월 추가
-  for (const [ym, revenue] of incomingByYM) {
-    state.monthly.push({ storeId: branchID, yearMonth: ym, revenue, investorPayout: 0 });
+  for (const [ym, incoming] of incomingByYM) {
+    state.monthly.push({
+      storeId: branchID,
+      yearMonth: ym,
+      revenue: incoming.revenue,
+      customers: incoming.customers,
+      investorPayout: 0,
+    });
   }
 
   if (!ui.selectedStoreId) ui.selectedStoreId = branchID;
