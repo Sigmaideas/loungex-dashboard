@@ -540,6 +540,18 @@ async function refreshBranchStatus() {
       idle: mine.length - operating,
       branches: mine,
     };
+    renderBranchStatus(); // 상태 타일을 먼저 그리고, 주문가능 수는 받는 대로 채운다
+
+    // 지점별 주문가능/판매상품 — 지점 전환이 필요해 지점 수만큼 호출된다
+    await runWithConcurrency(mine, 4, async (b) => {
+      if (!b.branchId) return;
+      try {
+        const branchToken = await barisChangeBranch(b.branchId, token);
+        Object.assign(b, await barisFetchMenuCounts(b.branchId, branchToken));
+      } catch {
+        // 실패한 지점은 숫자 없이 타일만 표시
+      }
+    });
   } catch {
     branchStatusSummary = null; // 조회 실패 시 카드 자체를 감춘다(빈 값 표시 방지)
   }
@@ -564,7 +576,11 @@ function renderBranchStatus() {
   if (!bars) return;
   bars.innerHTML = (s.branches || []).map((b, i) => {
     const cls = b.status === "OPERATING" ? "operating" : b.status === "NO_DATA" ? "nodata" : "idle";
-    return `<div class="status-bar ${cls}" data-branch-index="${i}"></div>`;
+    // 주문가능 수 — 판매상품 수보다 적으면(품절 있음) 빨간 글씨
+    const hasCount = Number.isFinite(b.orderable) && Number.isFinite(b.sellable);
+    const short = hasCount && b.orderable < b.sellable ? " short" : "";
+    const text = hasCount ? formatNumber(b.orderable) : "";
+    return `<div class="status-bar ${cls}${short}" data-branch-index="${i}">${text}</div>`;
   }).join("");
   hideBranchTooltip();
 }
@@ -584,6 +600,11 @@ function showBranchTooltip(tile) {
     <div class="tip-sep"></div>
     <div class="tip-row"><span>운영중</span><span>${formatMinutes(b.runTime)}</span></div>
     <div class="tip-row"><span>미운영</span><span>${formatMinutes(b.downTime)}</span></div>
+    ${Number.isFinite(b.orderable) && Number.isFinite(b.sellable) ? `
+      <div class="tip-sep"></div>
+      <div class="tip-row"><span>주문가능</span><span class="${b.orderable < b.sellable ? "tip-short" : ""}">${formatNumber(b.orderable)}</span></div>
+      <div class="tip-row"><span>판매상품</span><span>${formatNumber(b.sellable)}</span></div>
+    ` : ""}
   `;
   tip.hidden = false;
 
@@ -1569,6 +1590,22 @@ async function barisFetchBranchStatus(token) {
     runTime: Number(x.run_time) || 0,   // 분
     downTime: Number(x.down_time) || 0, // 분
   }));
+}
+
+/**
+ * 지점의 주문가능/판매상품 수 (바리스 판매상품관리와 같은 소스).
+ * GET /manage/menu/list/{branchID}?cate_cd=ALL → payload.list[{active_yn, soldout_yn}]
+ *   판매상품 = 판매(활성) 상품, 주문가능 = 그중 품절이 아닌 상품
+ *   (품절 상품은 키오스크에 보이지만 선택할 수 없다 = 주문 불가)
+ */
+async function barisFetchMenuCounts(branchID, token) {
+  const j = await barisGet(`/manage/menu/list/${branchID}?page=1&cate_cd=ALL&take=500`, token);
+  const list = Array.isArray(j?.payload?.list) ? j.payload.list : [];
+  const active = list.filter((m) => Number(m.active_yn) === 1);
+  return {
+    sellable: active.length,
+    orderable: active.filter((m) => !Number(m.soldout_yn)).length,
+  };
 }
 
 async function barisFetchOwnBranches(token) {

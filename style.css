@@ -308,12 +308,28 @@ input, select {
 }
 
 .status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   aspect-ratio: 1 / 1;
   border-radius: 6px;
   border: 1px solid #9ec5fe;
   box-sizing: border-box;
+  /* 타일 안의 주문가능 수 */
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
+
+/* 주문가능 < 판매상품 → 품절이 있다는 뜻이라 빨간 글씨 */
+.status-bar.short { color: var(--danger); }
+
+/* 연한 배경 타일에서는 흰 글씨가 안 보이므로 기본 글자색을 어둡게 */
+.status-bar.idle:not(.short),
+.status-bar.nodata:not(.short) { color: #4b5059; }
 
 .status-bar.operating { background: #68adfe; }
 .status-bar.idle { background: #e0eeff; }
@@ -370,6 +386,7 @@ input, select {
 }
 
 .tip-rate { margin-top: 8px; }
+.tip-short { color: var(--danger); }
 .tip-sep { margin: 8px 0; height: 1px; background: #e8e9ea; }
 .tip-row + .tip-row { margin-top: 6px; }
 
