@@ -1069,8 +1069,12 @@ function renderStoreTable(startYM, endYM) {
     return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
   };
   const meanRevenue = meanOf((r) => r.avgMonthlyRevenue);
-  const meanDailyCustomers = meanOf((r) => r.avgDailyCustomers);
   const meanTicket = meanOf((r) => r.avgTicket);
+  // 일방문객만 지점 평균의 평균이 아니라 누적 기준 — 전 지점 누적 방문객 ÷ 전 지점 운영일수.
+  // 운영 기간이 짧은 지점이 실제보다 크게 반영되지 않는다.
+  const customersSum = rows.reduce((acc, r) => acc + r.customersAll, 0);
+  const customerDaysSum = rows.reduce((acc, r) => acc + r.opDaysWithCustomers, 0);
+  const meanDailyCustomers = customerDaysSum > 0 ? customersSum / customerDaysSum : 0;
 
   tfoot.innerHTML = `
     <tr>
