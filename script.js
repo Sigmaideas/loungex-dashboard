@@ -1327,7 +1327,7 @@ const STORE_COLUMNS = [
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
   { label: "평균 일누적 방문객", sort: "cumulativeCustomers", center: true, title: "오픈 이후 누적 객수 (객수가 입력된 달 기준)" },
   { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
-  { label: "현장 : 앱", sort: "appRatio", center: true, title: "누적 결제 건수 기준 · 결제수단으로 구분(카드·현금=현장, 간편결제=앱)" },
+  { label: "앱 결제비율", sort: "appRatio", center: true, title: "누적 결제 건수 중 앱 결제 비중 · 결제수단으로 구분(카드·현금=현장, 간편결제=앱)" },
 ];
 
 // 지점 상세(로컬 매출 데이터)와 바리스 실시간 상태를 지점ID로 잇는다. 없으면 지점명으로.
@@ -1338,12 +1338,10 @@ function branchPayTypes(store) {
   return hit?.payTypes;
 }
 
-// "62 : 38" — 앞이 현장, 뒤가 앱
+// 앱 결제 비중 — 나머지는 현장(키오스크) 결제
 function channelCell(split) {
   if (!split) return "-";
-  return `<span class="channel-onsite">${Math.round(split.onsitePct)}</span>` +
-    `<span class="channel-sep"> : </span>` +
-    `<span class="channel-app">${Math.round(split.appPct)}</span>`;
+  return `<span class="channel-app">${Math.round(split.appPct)}%</span>`;
 }
 
 function renderStoreHead() {

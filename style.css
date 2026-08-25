@@ -714,10 +714,8 @@ input, select {
   color: var(--text-muted);
 }
 
-/* 현장 : 앱 결제 비율 — 두 수를 색으로 구분해 한눈에 읽히게 */
-.channel-onsite { color: var(--text); font-weight: 600; }
+/* 앱 결제비율 — 파란 글씨로 구분 */
 .channel-app { color: #296ff7; font-weight: 600; }
-.channel-sep { color: var(--text-muted); }
 
 /* 임대료 비율 방식 표시(예: "매출 10%") */
 .cell-note {
