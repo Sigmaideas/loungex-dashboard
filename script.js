@@ -706,10 +706,8 @@ function renderBranchStatus() {
           }</span>
           ${monthChangeMark(b.monthChange)}
         </div>
-        <div class="branch-card-foot">
-          <span class="branch-foot-left">${cardFootItems(b).join('<span class="branch-foot-dot">·</span>')}</span>
-          ${salePill(b)}
-        </div>
+        <div class="branch-card-foot">${cardFootItems(b).join('<span class="branch-foot-dot">·</span>')}</div>
+        <div class="branch-card-sale">${salePill(b)}</div>
       </div>`;
   }).join("");
 }
