@@ -56,9 +56,6 @@ let trendChart = null;
 /* ============================================================
  *  유틸 / 포맷
  * ============================================================ */
-const uid = (prefix = "s") =>
-  `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-
 const formatCurrency = (n) => {
   const v = Number(n) || 0;
   return "₩" + Math.round(v).toLocaleString("ko-KR");
@@ -1042,7 +1039,7 @@ function renderStoreTable(startYM, endYM) {
 
   if (state.stores.length === 0) {
     tbody.innerHTML =
-      `<tr><td colspan="${STORE_COLUMNS.length}" class="empty-state">아직 등록된 지점이 없습니다. "+ 지점 추가" 버튼으로 시작하세요.</td></tr>`;
+      `<tr><td colspan="${STORE_COLUMNS.length}" class="empty-state">아직 등록된 지점이 없습니다. 우측 상단 "업데이트"로 바리스에서 가져오세요.</td></tr>`;
     tfoot.innerHTML = "";
     updateSortHeaders();
     return;
@@ -1147,14 +1144,14 @@ function renderMonthlyTable() {
 
   const store = state.stores.find((s) => s.id === ui.selectedStoreId);
   if (!store) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">먼저 지점을 추가하세요.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">등록된 지점이 없습니다.</td></tr>';
     tfoot.innerHTML = "";
     return;
   }
 
   const rows = getMonthlyForStore(store.id);
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">해당 지점의 월별 실적이 없습니다. "+ 월 추가" 버튼으로 시작하세요.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">해당 지점의 월별 실적이 없습니다. 우측 상단 "업데이트"로 바리스에서 가져오세요.</td></tr>';
     tfoot.innerHTML = "";
     return;
   }
@@ -1334,60 +1331,11 @@ function applyEdit(editKind, cell, field, newValue) {
 /* ============================================================
  *  CRUD
  * ============================================================ */
-function addStore() {
-  const newStore = {
-    id: uid("s"),
-    name: `새 지점 ${state.stores.length + 1}`,
-    type: STORE_TYPE_DIRECT,
-    openDate: todayISO(),
-    openingProfit: 0,
-    operatingProfitRate: DEFAULT_OP_RATE,
-    totalInvestment: 0,
-    monthlyRent: 0,
-    monthlyLabor: DEFAULT_MONTHLY_LABOR,
-  };
-  state.stores.push(newStore);
-  ui.selectedStoreId = newStore.id;
-  saveToStorage();
-  renderAll();
-  showToast("지점이 추가되었습니다.");
-}
-
 function toggleStoreType(id) {
   const store = state.stores.find((s) => s.id === id);
   if (!store) return;
   const current = getStoreType(store);
   store.type = current === STORE_TYPE_DIRECT ? STORE_TYPE_OWNER : STORE_TYPE_DIRECT;
-  saveToStorage();
-  renderAll();
-}
-
-function addMonth() {
-  if (!ui.selectedStoreId) {
-    showToast("먼저 지점을 추가하세요.");
-    return;
-  }
-  const existing = getMonthlyForStore(ui.selectedStoreId);
-  let nextYM;
-  if (existing.length > 0) {
-    const last = existing[existing.length - 1].yearMonth;
-    let [y, m] = last.split("-").map(Number);
-    m++; if (m > 12) { m = 1; y++; }
-    nextYM = `${y}-${pad(m)}`;
-  } else {
-    const today = new Date();
-    nextYM = `${today.getFullYear()}-${pad(today.getMonth() + 1)}`;
-  }
-  if (state.monthly.find((x) => x.storeId === ui.selectedStoreId && x.yearMonth === nextYM)) {
-    showToast("이미 존재하는 연월입니다. 더블클릭으로 연월을 변경하세요.");
-    return;
-  }
-  state.monthly.push({
-    storeId: ui.selectedStoreId,
-    yearMonth: nextYM,
-    revenue: 0,
-    investorPayout: 0,
-  });
   saveToStorage();
   renderAll();
 }
@@ -1897,8 +1845,6 @@ function bindEvents() {
 
   document.getElementById("btn-save").addEventListener("click", cloudSave);
 
-  document.getElementById("btn-add-store").addEventListener("click", addStore);
-  document.getElementById("btn-add-month").addEventListener("click", addMonth);
 
   document.getElementById("monthly-store-select").addEventListener("change", (e) => {
     ui.selectedStoreId = e.target.value;
