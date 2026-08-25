@@ -753,6 +753,33 @@ function renderChart(startYM, endYM) {
 /* ============================================================
  *  월별 매출 추이 (시간축 · 지점별)
  * ============================================================ */
+
+/**
+ * 진행 중인 이번 달 매출을 한 달치로 환산한 예상값.
+ *   예상 = 현재까지 매출 / 경과 운영일 × 그 달 전체 운영일
+ * 오픈월이면 오픈일부터를 한 달로 본다. 이미 끝난 달(또는 오늘이 말일)이면 null.
+ */
+function projectFullMonthRevenue(store, ym, revenueSoFar) {
+  const today = todayISO();
+  if (ym !== today.slice(0, 7) || !(revenueSoFar > 0)) return null;
+
+  const openDay = store.openDate && store.openDate.slice(0, 7) === ym
+    ? Number(store.openDate.slice(8, 10)) || 1
+    : 1;
+  const fullDays = Math.max(0, daysInYearMonth(ym) - openDay + 1);
+
+  // 사용자가 이번 달 운영일수를 직접 넣었으면 그 값을 경과일로 본다
+  const row = state.monthly.find((m) => m.storeId === store.id && m.yearMonth === ym);
+  const entered = row && row.operatingDays != null && row.operatingDays !== "" ? Number(row.operatingDays) : null;
+  const elapsed = Math.min(
+    entered != null ? entered : Math.max(0, Number(today.slice(8, 10)) - openDay + 1),
+    fullDays
+  );
+
+  if (elapsed <= 0 || fullDays <= elapsed) return null; // 달이 이미 다 찼으면 예상 = 실적
+  return (revenueSoFar / elapsed) * fullDays;
+}
+
 function renderTrendChart(startYM, endYM) {
   const wrap = document.getElementById("chart-trend-wrap");
   if (!wrap) return;
@@ -779,9 +806,11 @@ function renderTrendChart(startYM, endYM) {
   const singleYear = startYM.slice(0, 4) === endYM.slice(0, 4);
 
   const periodEl = document.getElementById("chart-trend-period");
-  if (periodEl) {
-    periodEl.textContent = state.stores.length === 0 ? "" : `지점별 매출 · ${startYM} ~ ${endYM}`;
-  }
+  const setPeriodText = (note) => {
+    if (!periodEl) return;
+    periodEl.textContent = state.stores.length === 0 ? "" : `지점별 매출 · ${startYM} ~ ${endYM}${note}`;
+  };
+  setPeriodText("");
 
   if (storeRows.length === 0) {
     if (trendChart) { trendChart.destroy(); trendChart = null; }
@@ -820,12 +849,55 @@ function renderTrendChart(startYM, endYM) {
     };
   });
 
-  // 월 합계는 툴팁 하단에만 쓴다(선은 지점별 값 그대로 그린다)
+  // 진행 중인 이번 달 — 직전 달 실적에서 이어지는 점선으로 "한 달 환산" 예상치를 덧그린다
+  const projIdx = months.indexOf(todayISO().slice(0, 7));
+  const projections = storeRows.map((store, i) =>
+    projIdx < 0 ? null : projectFullMonthRevenue(store, months[projIdx], datasets[i].data[projIdx])
+  );
+  const hasProjection = projections.some((v) => v != null);
+
+  const projDatasets = !hasProjection ? [] : storeRows.map((store, i) => {
+    const color = CHART_PALETTE[i % CHART_PALETTE.length];
+    const data = months.map(() => null);
+    if (projections[i] != null) {
+      if (projIdx > 0) data[projIdx - 1] = datasets[i].data[projIdx - 1]; // 직전 달에서 출발
+      data[projIdx] = projections[i];
+    }
+    return {
+      label: `${shortStoreName(store.name)} (예상)`,
+      data,
+      borderColor: color,
+      backgroundColor: color,
+      pointBackgroundColor: "#ffffff",
+      pointBorderColor: color,
+      pointBorderWidth: 2,
+      borderWidth: 2,
+      borderDash: [5, 4],
+      pointRadius: (c) => (c.dataIndex === projIdx ? 4 : 0),
+      pointHoverRadius: (c) => (c.dataIndex === projIdx ? 6 : 0),
+      tension: 0,
+      spanGaps: false,
+      fill: false,
+      isProjection: true,
+    };
+  });
+
+  if (hasProjection) {
+    const projLabel = singleYear ? `${Number(months[projIdx].slice(5, 7))}월` : months[projIdx];
+    setPeriodText(` · 점선은 ${projLabel} 예상(한 달 환산)`);
+  }
+
+  // 월 합계는 툴팁 하단에만 쓴다(선은 지점별 값 그대로 그린다) — 실적 기준
   const monthTotals = months.map((ym, mi) =>
     datasets.reduce((s, ds) => s + (ds.data[mi] || 0), 0)
   );
+  const projTotal = projections.reduce((s, v, i) => s + (v != null ? v : (projIdx >= 0 ? datasets[i].data[projIdx] || 0 : 0)), 0);
   // y축 단위를 하나로 통일(억 또는 만) — 억/만이 섞여 보이지 않게
-  const maxAbs = Math.max(0, ...datasets.flatMap((ds) => ds.data.filter((v) => v != null).map(Math.abs)));
+  const maxAbs = Math.max(
+    0,
+    ...datasets.flatMap((ds) => ds.data.filter((v) => v != null).map(Math.abs)),
+    ...projections.filter((v) => v != null)
+  );
   const axisUnit = maxAbs >= 1e8 ? 1e8 : maxAbs >= 1e4 ? 1e4 : 1;
   const formatAxis = (v) => {
     if (v === 0) return "0";
@@ -834,7 +906,7 @@ function renderTrendChart(startYM, endYM) {
     return Math.round(v).toLocaleString("ko-KR");
   };
 
-  const data = { labels, datasets };
+  const data = { labels, datasets: [...datasets, ...projDatasets] };
 
   const options = {
     responsive: true,
@@ -864,6 +936,17 @@ function renderTrendChart(startYM, endYM) {
           usePointStyle: true,
           pointStyle: "circle",
           padding: 14,
+          // 예상선은 실선과 같은 지점이므로 범례에 따로 두지 않는다
+          filter: (item, chartData) => !chartData.datasets[item.datasetIndex]?.isProjection,
+        },
+        // 지점 하나를 끄면 그 지점의 실선과 예상 점선이 함께 꺼진다
+        onClick: (e, item, legend) => {
+          const ch = legend.chart;
+          const storeCount = ch.data.datasets.filter((d) => !d.isProjection).length;
+          [item.datasetIndex, item.datasetIndex + storeCount].forEach((di) => {
+            if (ch.data.datasets[di]) ch.setDatasetVisibility(di, !ch.isDatasetVisible(di));
+          });
+          ch.update();
         },
       },
       tooltip: {
@@ -874,13 +957,16 @@ function renderTrendChart(startYM, endYM) {
         borderColor: "#343a46",
         borderWidth: 1,
         padding: 10,
+        // 예상선은 출발점(직전 달)에도 값이 있으므로 예상 달에서만 보여준다
+        filter: (item) => item.parsed.y != null && (!item.dataset.isProjection || item.dataIndex === projIdx),
         callbacks: {
-          // 매출이 없는 지점은 줄에서 빼고, 마지막에 그 달의 합계를 보여준다
-          label: (c) => (c.parsed.y == null ? null : `${c.dataset.label}: ${formatCurrency(c.parsed.y)}`),
+          label: (c) => `${c.dataset.label}: ${formatCurrency(c.parsed.y)}`,
           footer: (items) => {
             if (items.length === 0) return "";
-            const total = monthTotals[items[0].dataIndex] || 0;
-            return `합계: ${formatCurrency(total)}`;
+            const i = items[0].dataIndex;
+            const lines = [`합계: ${formatCurrency(monthTotals[i] || 0)}`];
+            if (hasProjection && i === projIdx) lines.push(`예상 합계: ${formatCurrency(projTotal)}`);
+            return lines.join("\n");
           },
         },
       },
