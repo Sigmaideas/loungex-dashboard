@@ -407,31 +407,6 @@ function getStoreMetrics(store, startYM, endYM) {
   };
 }
 
-/**
- * 특정 월 한 달의 회사 P&L.
- * 지점 상세 표의 "회사 P&L"과 같은 공식을 그 달 매출에 적용하되,
- * 고정비(임대료·인건비)는 실제 운영일 기준으로 일할 계산한다.
- *   매출(VAT별도) - 투자자 회수금 - 식자재비 - 임대료×일할 - 인건비×일할
- * 임대료를 "매출 %"로 설정한 지점은 이미 그 달 매출에 비례하므로 일할을 또 적용하지 않는다.
- */
-function getMonthlyCompanyPnl(store, monthRow) {
-  const net = (monthRow.revenue || 0) * 0.9;
-  const materialRate = state.materialRate ?? 0.3;
-
-  const daysInMonth = daysInYearMonth(monthRow.yearMonth);
-  const opDays = getOperatingDays(store, monthRow);
-  const dayRatio = daysInMonth > 0 ? Math.min(1, Math.max(0, opDays / daysInMonth)) : 1;
-
-  const rent = resolveMonthlyRent(store, net);
-  const rentCost = getRentRate(store) != null ? rent : rent * dayRatio;
-
-  return net
-    - net * 0.2 // 투자자 회수금(회수비율 20%)
-    - net * materialRate
-    - rentCost
-    - DEFAULT_MONTHLY_LABOR * dayRatio;
-}
-
 function getDataDateRange() {
   if (state.monthly.length === 0) {
     const now = new Date();
@@ -776,22 +751,28 @@ function renderChart(startYM, endYM) {
 }
 
 /* ============================================================
- *  월별 매출·순익 추이 (시간축)
+ *  월별 매출 추이 (시간축 · 지점별)
  * ============================================================ */
 function renderTrendChart(startYM, endYM) {
   const wrap = document.getElementById("chart-trend-wrap");
   if (!wrap) return;
 
-  // 선택 기간의 월별로 전 지점 매출 / 회사 P&L 합산
-  const revByMonth = new Map();
-  const pnlByMonth = new Map();
+  // 지점 × 월 매출 — 한 달의 막대를 지점별로 쌓아 총매출과 구성을 함께 본다
+  const revByStoreMonth = new Map(); // storeId -> Map(yearMonth -> revenue)
+  const totalByStore = new Map();
   state.monthly.forEach((m) => {
     if (!inRange(m.yearMonth, startYM, endYM)) return;
-    const store = state.stores.find((s) => s.id === m.storeId);
-    if (!store) return;
-    revByMonth.set(m.yearMonth, (revByMonth.get(m.yearMonth) || 0) + (m.revenue || 0));
-    pnlByMonth.set(m.yearMonth, (pnlByMonth.get(m.yearMonth) || 0) + getMonthlyCompanyPnl(store, m));
+    if (!state.stores.some((s) => s.id === m.storeId)) return;
+    if (!revByStoreMonth.has(m.storeId)) revByStoreMonth.set(m.storeId, new Map());
+    const byMonth = revByStoreMonth.get(m.storeId);
+    byMonth.set(m.yearMonth, (byMonth.get(m.yearMonth) || 0) + (m.revenue || 0));
+    totalByStore.set(m.storeId, (totalByStore.get(m.storeId) || 0) + (m.revenue || 0));
   });
+
+  // 매출 비중 순 정렬 — 위쪽 "매출 비중" 차트와 색이 같아지도록 동일 기준
+  const storeRows = state.stores
+    .filter((s) => (totalByStore.get(s.id) || 0) > 0)
+    .sort((a, b) => (totalByStore.get(b.id) || 0) - (totalByStore.get(a.id) || 0));
 
   // 상단 기간 선택 그대로를 시간축으로 사용(값 없는 달은 빈칸으로 둠)
   const months = monthsRange(startYM, endYM);
@@ -799,10 +780,10 @@ function renderTrendChart(startYM, endYM) {
 
   const periodEl = document.getElementById("chart-trend-period");
   if (periodEl) {
-    periodEl.textContent = state.stores.length === 0 ? "" : `전 지점 합계 · ${startYM} ~ ${endYM}`;
+    periodEl.textContent = state.stores.length === 0 ? "" : `지점별 매출 · ${startYM} ~ ${endYM}`;
   }
 
-  if (!months.some((ym) => revByMonth.has(ym))) {
+  if (storeRows.length === 0) {
     if (trendChart) { trendChart.destroy(); trendChart = null; }
     wrap.style.height = "";
     wrap.innerHTML = '<div class="empty-state">선택 기간에 매출 데이터가 없습니다.</div>';
@@ -813,19 +794,32 @@ function renderTrendChart(startYM, endYM) {
     wrap.innerHTML = '<canvas id="chart-trend"></canvas>';
   }
   const ctx = document.getElementById("chart-trend");
-  wrap.style.height = "";
+  // 막대 + x축 + 범례(지점 4개당 한 줄) 높이
+  wrap.style.height = `${260 + Math.ceil(storeRows.length / 4) * 24}px`;
 
-  // 값이 없는 달은 null → 막대를 그리지 않고 빈칸으로 둔다
-  const revenues = months.map((ym) => (revByMonth.has(ym) ? revByMonth.get(ym) : null));
-  const pnls = months.map((ym) => (pnlByMonth.has(ym) ? pnlByMonth.get(ym) : null));
   // 단일 연도면 "1월"~"12월", 여러 해에 걸치면 "2025-01" 형태
   const labels = months.map((ym) => (singleYear ? `${Number(ym.slice(5, 7))}월` : ym));
   // 짧은 기간을 선택하면 막대가 지나치게 가늘어 보이지 않게 두께를 키운다
-  const barThickness = months.length <= 6 ? 48 : 30;
+  const barThickness = months.length <= 6 ? 64 : 40;
 
-  // y축 단위를 하나로 통일(억 또는 만) — 억/만이 섞여 보이지 않게
-  const values = [...revenues, ...pnls].filter((v) => v != null);
-  const maxAbs = Math.max(0, ...values.map(Math.abs));
+  // 값이 없는 달은 null → 막대를 그리지 않고 빈칸으로 둔다
+  const datasets = storeRows.map((store, i) => {
+    const byMonth = revByStoreMonth.get(store.id) || new Map();
+    return {
+      label: shortStoreName(store.name),
+      data: months.map((ym) => (byMonth.has(ym) ? byMonth.get(ym) : null)),
+      backgroundColor: CHART_PALETTE[i % CHART_PALETTE.length],
+      borderRadius: 2,
+      borderSkipped: false,
+      maxBarThickness: barThickness,
+    };
+  });
+
+  // y축 단위를 하나로 통일(억 또는 만) — 억/만이 섞여 보이지 않게, 기준은 월 합계
+  const monthTotals = months.map((ym, mi) =>
+    datasets.reduce((s, ds) => s + (ds.data[mi] || 0), 0)
+  );
+  const maxAbs = Math.max(0, ...monthTotals.map(Math.abs));
   const axisUnit = maxAbs >= 1e8 ? 1e8 : maxAbs >= 1e4 ? 1e4 : 1;
   const formatAxis = (v) => {
     if (v === 0) return "0";
@@ -834,28 +828,7 @@ function renderTrendChart(startYM, endYM) {
     return Math.round(v).toLocaleString("ko-KR");
   };
 
-  const data = {
-    labels,
-    datasets: [
-      {
-        label: "매출",
-        data: revenues,
-        backgroundColor: "#296ff7",
-        borderRadius: 3,
-        borderSkipped: false,
-        maxBarThickness: barThickness,
-      },
-      {
-        label: "순익 (회사 P&L)",
-        data: pnls,
-        // 흑자는 초록, 적자는 빨강 — 부호가 한눈에 보이게
-        backgroundColor: pnls.map((v) => (v < 0 ? "#e5484d" : "#23a375")),
-        borderRadius: 3,
-        borderSkipped: false,
-        maxBarThickness: barThickness,
-      },
-    ],
-  };
+  const data = { labels, datasets };
 
   const options = {
     responsive: true,
@@ -863,14 +836,15 @@ function renderTrendChart(startYM, endYM) {
     interaction: { mode: "index", intersect: false },
     scales: {
       x: {
+        stacked: true,
         grid: { display: false },
         border: { display: false },
         ticks: { color: "#868e96", font: { size: 11 } },
       },
       y: {
+        stacked: true,
         beginAtZero: true,
-        // 0선을 진하게 — 적자 막대가 아래로 내려간 게 분명히 보이도록
-        grid: { color: (c) => (c.tick?.value === 0 ? "#b8bec8" : "#eceef2") },
+        grid: { color: "#eceef2" },
         border: { display: false },
         ticks: { color: "#868e96", font: { size: 11 }, callback: (v) => formatAxis(v) },
       },
@@ -885,26 +859,26 @@ function renderTrendChart(startYM, endYM) {
           boxHeight: 10,
           usePointStyle: true,
           pointStyle: "circle",
-          padding: 16,
-          // 순익은 막대 색이 흑자/적자에 따라 달라지므로 범례 색은 초록으로 고정
-          generateLabels: (c) => c.data.datasets.map((ds, i) => ({
-            text: ds.label,
-            fillStyle: i === 0 ? "#296ff7" : "#23a375",
-            strokeStyle: i === 0 ? "#296ff7" : "#23a375",
-            lineWidth: 0,
-            fontColor: "#495057",
-            datasetIndex: i,
-          })),
+          padding: 14,
         },
       },
       tooltip: {
         backgroundColor: "#343a46",
         titleColor: "#ffffff",
         bodyColor: "#ffffff",
+        footerColor: "#ffffff",
         borderColor: "#343a46",
         borderWidth: 1,
         padding: 10,
-        callbacks: { label: (c) => `${c.dataset.label}: ${formatCurrency(c.parsed.y || 0)}` },
+        callbacks: {
+          // 매출이 없는 지점은 줄에서 빼고, 마지막에 그 달의 합계를 보여준다
+          label: (c) => (c.parsed.y == null ? null : `${c.dataset.label}: ${formatCurrency(c.parsed.y)}`),
+          footer: (items) => {
+            if (items.length === 0) return "";
+            const total = monthTotals[items[0].dataIndex] || 0;
+            return `합계: ${formatCurrency(total)}`;
+          },
+        },
       },
     },
   };
