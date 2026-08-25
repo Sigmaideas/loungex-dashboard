@@ -542,13 +542,9 @@ async function refreshBranchStatus() {
         detailErrors.push(`${b.branchName}: 결제수단 (${e.message})`);
       }
     });
-    // 현장/앱 어느 쪽으로도 분류되지 않은 결제수단은 비율에서 빠지므로 눈에 띄게 남긴다
+    // 새로운 결제수단이 생기면 알아볼 수 있게 종류를 남긴다
     const payTypeNames = [...new Set(mine.flatMap((b) => (b.payTypes || []).map((p) => p.name)))];
     if (payTypeNames.length) console.info("[결제수단 종류]", payTypeNames.join(", "));
-    const unmapped = payTypeNames.filter(
-      (n) => !ONSITE_PAY.test(n) && !APP_PAY.test(n) && !EXCLUDED_PAY.test(n)
-    );
-    if (unmapped.length) console.warn("[현장/앱 미분류 결제수단]", unmapped.join(", "));
     // 바리스 매출분석 화면과 숫자를 직접 대조할 수 있게 원본을 남긴다
     const payRows = mine.flatMap((b) =>
       (b.payTypes || []).map((p) => ({ 지점: b.branchName, 결제수단: p.name, 건수: p.count, 금액: p.amount }))
@@ -1332,7 +1328,7 @@ const STORE_COLUMNS = [
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
   { label: "평균 일누적 방문객", sort: "cumulativeCustomers", center: true, title: "오픈 이후 누적 객수 (객수가 입력된 달 기준)" },
   { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
-  { label: "앱 결제비율", sort: "appRatio", center: true, title: "누적 결제 건수 중 앱 결제 비중 · 결제수단으로 구분(카드·현금=현장, 간편결제=앱)" },
+  { label: "앱 결제비율", sort: "appRatio", center: true, title: "누적 결제 건수 중 앱 결제 비중 · 결제수단이 \"앱 …\"(앱 X-pay·앱 신용카드 등)이면 앱, 나머지는 현장" },
 ];
 
 /* 지점 상세(로컬 매출 데이터)와 바리스 실시간 상태를 잇는다.
@@ -1677,26 +1673,25 @@ async function barisFetchPayTypes(branchID, token) {
   return { payTypes };
 }
 
-/* 결제수단 문자열 → 현장(키오스크) / 앱.
-   바리스는 주문 경로를 따로 주지 않아 결제수단으로 갈음한다.
-   여기 없는 문자열은 "기타"로 빠지고 콘솔에 남으니, 실제 값을 보고 채워 넣으면 된다. */
-const ONSITE_PAY = /카드|현금|신용|체크|키오스크|현장/;
-const APP_PAY = /앱|어플|모바일|카카오|네이버|페이코|토스|간편|엑스\s*페이|x\s*(pay|페이)/i;
+/* 결제수단 문자열 → 앱 / 현장(키오스크).
+   바리스는 앱 결제를 "앱 X-pay", "앱 기타결제", "앱 신용카드" 처럼 "앱" 을 붙여 구분한다.
+   그래서 이름에 "앱" 이 있으면 앱, 나머지("신용카드" 등)는 현장으로 본다.
+   ※ 카드/현금 같은 수단명을 먼저 보면 "앱 신용카드" 가 현장으로 새므로 앱을 먼저 판정한다. */
+const APP_PAY = /앱/;
 // 매출로 볼 수 없는 건들(재제조·무료·시연·테스트)은 비율에서 뺀다
-const EXCLUDED_PAY = /재제조|무료|시연|테스트|면접/;
+const EXCLUDED_PAY = /재제조|무료|시연|테스트|면접|디버그/;
 
 function payChannelSplit(payTypes) {
   if (!Array.isArray(payTypes) || payTypes.length === 0) return null;
-  let onsite = 0, app = 0, other = 0;
+  let onsite = 0, app = 0;
   for (const p of payTypes) {
     if (EXCLUDED_PAY.test(p.name)) continue;
-    if (ONSITE_PAY.test(p.name)) onsite += p.count;
-    else if (APP_PAY.test(p.name)) app += p.count;
-    else other += p.count;
+    if (APP_PAY.test(p.name)) app += p.count;
+    else onsite += p.count;
   }
   const total = onsite + app;
   if (total === 0) return null;
-  return { onsite, app, other, onsitePct: (onsite / total) * 100, appPct: (app / total) * 100 };
+  return { onsite, app, onsitePct: (onsite / total) * 100, appPct: (app / total) * 100 };
 }
 
 async function barisFetchOwnBranches(token) {
