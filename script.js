@@ -310,13 +310,6 @@ function getStoreMetrics(store, startYM, endYM) {
   // 지점 상세용(전체 기간 기준)
   const withCustomersAll = all.filter((m) => (Number(m.customers) || 0) > 0);
   const customersAll = withCustomersAll.reduce((s, m) => s + Number(m.customers), 0);
-  /* 일평균 방문객 = 누적 객수 ÷ 그 객수가 쌓인 날수.
-     운영일자(오픈~오늘) 전체로 나누면 안 된다 — 객수가 안 들어온 달이 있으면
-     분자에는 없는 날이 분모에만 들어가 평균이 낮게 나온다. 그래서 객수가 있는
-     달의 운영일수만 더해 분모로 쓴다(오픈 중간인 달·이번 달은 자동으로 잘린다). */
-  const customerDaysAll = withCustomersAll.reduce(
-    (s, m) => s + daysInFilteredWindow(store.openDate, m.yearMonth, m.yearMonth), 0);
-  const avgDailyCustomers = customerDaysAll > 0 ? customersAll / customerDaysAll : 0;
   const ticketSumAll = withCustomersAll.reduce((s, m) => s + monthTicket(m) * Number(m.customers), 0);
   const avgTicket = customersAll > 0 ? ticketSumAll / customersAll : 0;
   const totalRevenueAll = all.reduce((s, m) => s + (m.revenue || 0), 0);
@@ -401,8 +394,6 @@ function getStoreMetrics(store, startYM, endYM) {
     customersFiltered,
     ticketSumFiltered,
     customersAll,
-    customerDaysAll,
-    avgDailyCustomers,
     ticketSumAll,
     avgTicket,
   };
@@ -1498,7 +1489,6 @@ function getSortedStoreRows(startYM, endYM) {
       case "avgRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
       // 일평균은 월평균을 30으로 나눈 값이라 정렬 순서는 같지만, 컬럼별 정렬 상태 표시를 위해 따로 둔다
       case "avgDailyRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
-      case "dailyCustomers": av = a.avgDailyCustomers; bv = b.avgDailyCustomers; break;
       case "avgTicket": av = a.avgTicket; bv = b.avgTicket; break;
       case "appRatio": av = payChannelSplit(branchPayTypes(a.store))?.appPct ?? -1;
                        bv = payChannelSplit(branchPayTypes(b.store))?.appPct ?? -1; break;
@@ -1529,7 +1519,6 @@ const STORE_COLUMNS = [
   { label: "지점명", sort: "name" },
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
-  { label: "일평균 방문객", sort: "dailyCustomers", center: true, title: "누적 객수 ÷ 운영일수 · 객수가 들어온 달의 일수로만 나눈다" },
   { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
   { label: "앱 결제비율", sort: "appRatio", center: true, title: "누적 결제 건수 중 앱 결제 비중 · 결제수단이 \"앱 …\"(앱 X-pay·앱 신용카드 등)이면 앱, 나머지는 현장" },
   { label: "OTC 평균", sort: "otcAvg", center: true, title: "OTC(Order to Completion) = 주문 접수 → 제조 완료 · 바리스 지점별 순위 기준 · 이번 달 1일~오늘 평균" },
@@ -1597,9 +1586,6 @@ function renderStoreTable(startYM, endYM) {
       <td>${escapeHtml(store.name)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
-      <td class="num center cell-readonly">${
-        m.avgDailyCustomers > 0 ? `${formatNumber(Math.round(m.avgDailyCustomers))}명` : "-"
-      }</td>
       <td class="num center cell-readonly">${m.avgTicket > 0 ? formatCurrency(m.avgTicket) : "-"}</td>
       <td class="num center cell-readonly">${channelCell(payChannelSplit(branchPayTypes(store)))}</td>
       <td class="num center cell-readonly">${otcCell(branchOtcAvg(store))}</td>
@@ -1614,7 +1600,6 @@ function renderStoreTable(startYM, endYM) {
   };
   const meanRevenue = meanOf((r) => r.avgMonthlyRevenue);
   const meanTicket = meanOf((r) => r.avgTicket);
-  const meanCustomers = meanOf((r) => r.avgDailyCustomers);
   // 전체매장 평균 OTC = 지점별 평균의 평균(다른 열과 같은 "매장 평균" 기준)
   const meanOtc = meanOf((r) => branchOtcAvg(r.store) ?? 0);
 
@@ -1623,7 +1608,6 @@ function renderStoreTable(startYM, endYM) {
       <td>매장 평균</td>
       <td class="num center">${formatCurrency(meanRevenue * 0.9)}</td>
       <td class="num center">${formatCurrency(meanRevenue * 0.9 / 30)}</td>
-      <td class="num center">${meanCustomers > 0 ? `${formatNumber(Math.round(meanCustomers))}명` : "-"}</td>
       <td class="num center">${meanTicket > 0 ? formatCurrency(meanTicket) : "-"}</td>
       <td class="num center">${channelCell(payChannelSplit(
         rows.flatMap((r) => branchPayTypes(r.store) || [])
@@ -1908,7 +1892,6 @@ function monthOverMonthChange(lastDays, curDays, now) {
  */
 async function barisFetchPayTypes(branchID, token) {
   const j = await barisGet(`/analysis/sales/graph/${branchID}?tab_cd=ALL`, token);
-  logGraphPayloadShape(j?.payload);
   const list = Array.isArray(j?.payload?.sales_pay_type) ? j.payload.sales_pay_type : [];
   const payTypes = list
     .map((r) => ({
@@ -1919,26 +1902,6 @@ async function barisFetchPayTypes(branchID, token) {
     .filter((r) => r.name && r.count > 0)
     .sort((a, b) => b.count - a.count);
   return { payTypes };
-}
-
-/* 진단용 — 매출분석 응답에 결제수단 말고 또 뭐가 오는지 한 번만 찍는다.
-   시간대별 방문객이 이 응답에 이미 들어 있으면 콜을 새로 붙일 필요가 없다.
-   ※ 시간당 방문객 열을 붙이고 나면 이 함수는 지운다. */
-let graphShapeLogged = false;
-function logGraphPayloadShape(payload) {
-  if (graphShapeLogged || !payload) return;
-  graphShapeLogged = true;
-  const shape = Object.entries(payload).map(([k, v]) => ({
-    키: k,
-    형태: Array.isArray(v) ? `배열(${v.length})` : typeof v,
-    // 배열이면 첫 원소의 키를, 값이면 값 자체를 보여 준다
-    내용: Array.isArray(v)
-      ? (v[0] && typeof v[0] === "object" ? Object.keys(v[0]).join(", ") : String(v[0] ?? ""))
-      : String(v),
-  }));
-  console.info("[매출분석 응답 구조] /analysis/sales/graph — 시간대별 방문객이 여기 있는지 확인용");
-  if (console.table) console.table(shape);
-  else console.info(shape);
 }
 
 /**
