@@ -483,6 +483,7 @@ function renderAll() {
 
 // 로그아웃: 토큰·데이터 삭제 후 잠금 화면
 function logout() {
+  stopBranchPolling();
   localStorage.removeItem(BARIS_TOKEN_STORAGE);
   localStorage.removeItem(STORAGE_KEY);
   state.stores = [];
@@ -495,19 +496,82 @@ function logout() {
 /* ============================================================
  *  KPI
  * ============================================================ */
-/** 바리스에서 지점 운영 상태를 받아 "라운지엑스24h" 지점만 집계 */
-async function refreshBranchStatus() {
+/* 지점 카드 자동 갱신 주기.
+   한 틱에 드는 호출은 전지점 2콜(운영현황·OTC) + 지점당 2콜(지점전환·오늘 지표)이다.
+   스파크라인(6개월 캘린더 6콜)·지난달 대비·결제수단은 하루 단위로만 움직여 폴링에서 뺀다.
+   → 10지점 기준 한 틱 22콜, 전체 업데이트(102콜)의 5분의 1. */
+const BRANCH_POLL_MS = 3 * 60 * 1000;
+let branchPollTimer = null;
+let branchRefreshing = false;   // 앞 틱이 안 끝났으면 건너뛴다(겹침 방지)
+let lastBranchRefreshAt = 0;
+
+function startBranchPolling() {
+  stopBranchPolling();
+  if (!getBarisToken()) return;
+  branchPollTimer = setInterval(pollBranchStatus, BRANCH_POLL_MS);
+}
+
+function stopBranchPolling() {
+  if (branchPollTimer) clearInterval(branchPollTimer);
+  branchPollTimer = null;
+}
+
+// 안 보이는 동안 건너뛴 갱신은 탭이 돌아올 때 한 번 당겨 받는다
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !branchPollTimer) return;
+  if (Date.now() - lastBranchRefreshAt >= BRANCH_POLL_MS) pollBranchStatus();
+});
+
+function pollBranchStatus() {
+  // 안 보이는 탭에서는 호출하지 않는다(다시 보일 때 밀린 만큼 한 번 당겨 받는다)
+  if (document.visibilityState !== "visible") return;
+  if (!getBarisToken()) { stopBranchPolling(); return; }
+  refreshBranchStatus({ full: false });
+}
+
+/**
+ * 바리스에서 지점 운영 상태를 받아 "라운지엑스24h" 지점만 집계.
+ *   full: true  — 전체 업데이트. 스파크라인·지난달 대비·결제수단까지 새로 받는다.
+ *   full: false — 자동 갱신(폴링). 오늘 지표와 상태·OTC만 받고 나머지는 앞 값을 이어쓴다.
+ */
+async function refreshBranchStatus({ full = true } = {}) {
   const token = getBarisToken();
   if (!token) {
+    stopBranchPolling();
     branchStatusSummary = null;
     renderBranchStatus();
     return;
   }
+  if (branchRefreshing) return;
+  branchRefreshing = true;
   try {
     const rows = await barisFetchBranchStatus(token);
     const mine = rows
       .filter((r) => r.branchName.includes(BARIS_BRAND_FILTER))
       .sort((a, b) => a.branchName.localeCompare(b.branchName, "ko"));
+    // 폴링에서 다시 받지 않는 값(스파크라인·지난달 대비·결제수단·날씨)은 앞 틱 것을 이어쓴다.
+    // 전체 업데이트 전에 새로 생긴 지점은 다음 전체 업데이트 때 채워진다.
+    if (!full) {
+      const prev = new Map((branchStatusSummary?.branches || []).map((b) => [b.branchId, b]));
+      for (const b of mine) {
+        const old = prev.get(b.branchId);
+        if (!old) continue;
+        Object.assign(b, {
+          series: old.series,
+          monthChange: old.monthChange,
+          payTypes: old.payTypes,
+          todayWeather: old.todayWeather,
+          // 오늘 지표도 일단 이어받는다 — 아래에서 새 값으로 덮이고,
+          // 조회가 실패한 지점만 앞 값이 남는다("-"로 깜빡이지 않게)
+          todayAmount: old.todayAmount,
+          todayOrders: old.todayOrders,
+          todayProduced: old.todayProduced,
+          orderable: old.orderable,
+          sellable: old.sellable,
+          otcAvg: old.otcAvg,
+        });
+      }
+    }
     const operating = mine.filter((r) => r.status === "OPERATING").length;
     branchStatusSummary = {
       total: mine.length,
@@ -515,7 +579,9 @@ async function refreshBranchStatus() {
       idle: mine.length - operating,
       branches: mine,
     };
-    renderBranchStatus(); // 상태 타일을 먼저 그리고, 주문가능 수는 받는 대로 채운다
+    // 전체 업데이트는 상태 타일을 먼저 그리고 주문가능 수를 받는 대로 채운다.
+    // 폴링은 이미 화면에 값이 있어 중간 렌더를 건너뛴다(깜빡임 방지).
+    if (full) renderBranchStatus();
 
     // 지점별 오늘 실적/상품 수 — 바리스 운영관리 페이지와 같은 소스
     const detailErrors = [];
@@ -549,6 +615,7 @@ async function refreshBranchStatus() {
       } catch (e) {
         detailErrors.push(`${b.branchName}: 오늘 지표 (${e.message})`);
       }
+      if (!full) return; // 폴링은 여기까지 — 아래 7콜은 하루 단위로만 변한다
       try {
         Object.assign(b, await barisFetchDailySeries(b.branchId, branchToken));
       } catch (e) {
@@ -561,30 +628,46 @@ async function refreshBranchStatus() {
       }
     });
     await otcTask;
-    // 새로운 결제수단이 생기면 알아볼 수 있게 종류를 남긴다
-    const payTypeNames = [...new Set(mine.flatMap((b) => (b.payTypes || []).map((p) => p.name)))];
-    if (payTypeNames.length) console.info("[결제수단 종류]", payTypeNames.join(", "));
-    // 바리스 매출분석 화면과 숫자를 직접 대조할 수 있게 원본을 남긴다
-    const payRows = mine.flatMap((b) =>
-      (b.payTypes || []).map((p) => ({ 지점: b.branchName, 결제수단: p.name, 건수: p.count, 금액: p.amount }))
-    );
-    if (payRows.length && console.table) console.table(payRows);
-    // OTC는 바리스 홈의 지점별 순위 화면과 대조할 수 있게 남긴다
-    const otcRows = mine
-      .filter((b) => Number.isFinite(b.otcAvg))
-      .map((b) => ({ 지점: b.branchName, "OTC 평균": formatDuration(b.otcAvg) }));
-    if (otcRows.length && console.table) console.table(otcRows);
+    lastBranchRefreshAt = Date.now();
+    if (detailErrors.length) {
+      console.warn(full ? "[지점 상세 조회 실패]" : "[지점 자동 갱신 일부 실패]", detailErrors);
+    }
 
-    const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
-    const graphed = mine.filter((b) => (b.series || []).length > 0).length;
-    if (detailErrors.length) console.warn("[지점 상세 조회 실패]", detailErrors);
-    // 오늘 지표든 배경 그래프든 전 지점이 비면 원인을 화면에도 알린다
-    if ((ok === 0 || graphed === 0) && detailErrors.length) {
-      showToast(`지점 상세 조회 실패 — ${detailErrors[0]}`);
+    if (full) {
+      startBranchPolling(); // 전체 업데이트를 받은 시점부터 자동 갱신 시작
+      // 새로운 결제수단이 생기면 알아볼 수 있게 종류를 남긴다
+      const payTypeNames = [...new Set(mine.flatMap((b) => (b.payTypes || []).map((p) => p.name)))];
+      if (payTypeNames.length) console.info("[결제수단 종류]", payTypeNames.join(", "));
+      // 바리스 매출분석 화면과 숫자를 직접 대조할 수 있게 원본을 남긴다
+      const payRows = mine.flatMap((b) =>
+        (b.payTypes || []).map((p) => ({ 지점: b.branchName, 결제수단: p.name, 건수: p.count, 금액: p.amount }))
+      );
+      if (payRows.length && console.table) console.table(payRows);
+      // OTC는 바리스 홈의 지점별 순위 화면과 대조할 수 있게 남긴다
+      const otcRows = mine
+        .filter((b) => Number.isFinite(b.otcAvg))
+        .map((b) => ({ 지점: b.branchName, "OTC 평균": formatDuration(b.otcAvg) }));
+      if (otcRows.length && console.table) console.table(otcRows);
+
+      const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
+      const graphed = mine.filter((b) => (b.series || []).length > 0).length;
+      // 오늘 지표든 배경 그래프든 전 지점이 비면 원인을 화면에도 알린다
+      if ((ok === 0 || graphed === 0) && detailErrors.length) {
+        showToast(`지점 상세 조회 실패 — ${detailErrors[0]}`);
+      }
     }
   } catch (e) {
     console.warn("[지점 운영 현황 조회 실패]", e?.message || e);
-    branchStatusSummary = null; // 조회 실패 시 카드 자체를 감춘다(빈 값 표시 방지)
+    // 토큰이 만료되면 폴링을 멈추고 재로그인을 알린다(3분마다 401을 두드리지 않게)
+    if (String(e?.message || "").includes("401")) {
+      stopBranchPolling();
+      if (!full) showToast("바리스 세션이 만료되었습니다. 업데이트로 다시 로그인하세요.");
+    }
+    // 전체 업데이트 실패는 카드 자체를 감추고(빈 값 표시 방지),
+    // 자동 갱신 실패는 화면을 건드리지 않고 앞 값을 그대로 둔다.
+    if (full) branchStatusSummary = null;
+  } finally {
+    branchRefreshing = false;
   }
   renderBranchStatus();
   // 지점 상세의 "현장 : 앱" 열은 방금 받은 결제수단을 쓰므로 함께 다시 그린다
@@ -758,6 +841,13 @@ function cardFootItems(b) {
   }
   if (Number.isFinite(b.todayProduced)) {
     items.push(`<span>제조 <b>${formatNumber(b.todayProduced)}</b>잔</span>`);
+  }
+  // OTC는 이번 달 평균이라 "오늘"이 아니다. 라벨로 구분되니 같은 줄에 둔다.
+  if (Number.isFinite(b.otcAvg)) {
+    items.push(
+      `<span title="OTC(Order to Completion) = 주문 접수 → 제조 완료 · 이번 달 1일~오늘 평균">` +
+      `OTC <b>${formatDuration(b.otcAvg)}</b></span>`
+    );
   }
   return items; // 값이 하나도 없으면 상태 칩("데이터 없음")만 남기고 비워 둔다
 }
