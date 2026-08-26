@@ -497,10 +497,11 @@ function logout() {
  *  KPI
  * ============================================================ */
 /* 지점 카드 자동 갱신 주기.
-   한 틱에 드는 호출은 전지점 2콜(운영현황·OTC) + 지점당 2콜(지점전환·오늘 지표)이다.
+   한 틱에 드는 호출은 전지점 3콜(운영현황·OTC·오늘 지표)이 전부다 — 지점 수와 무관하다.
    스파크라인(6개월 캘린더 6콜)·지난달 대비·결제수단은 하루 단위로만 움직여 폴링에서 뺀다.
-   → 10지점 기준 한 틱 22콜, 전체 업데이트(102콜)의 5분의 1. */
-const BRANCH_POLL_MS = 3 * 60 * 1000;
+   → 10지점 기준 한 틱 3콜, 전체 업데이트(83콜)의 30분의 1.
+   지점당 2콜이던 시절엔 3분이었지만, 전지점 API로 바뀌어 1분에 3콜이면 충분히 가볍다. */
+const BRANCH_POLL_MS = 60 * 1000;
 let branchPollTimer = null;
 let branchRefreshing = false;   // 앞 틱이 안 끝났으면 건너뛴다(겹침 방지)
 let lastBranchRefreshAt = 0;
@@ -586,7 +587,7 @@ async function refreshBranchStatus({ full = true } = {}) {
     // 지점별 오늘 실적/상품 수 — 바리스 운영관리 페이지와 같은 소스
     const detailErrors = [];
 
-    // OTC는 전 지점을 한 콜로 받는다(지점 전환 불필요). 지점별 조회와 나란히 돌리고,
+    // OTC는 전 지점을 한 콜로 받는다(지점 전환 불필요). 아래 조회와 나란히 돌리고,
     // 실패해도 나머지 지표는 그대로 간다.
     const otcTask = barisFetchOtcAll(token)
       .then((otc) => {
@@ -597,23 +598,44 @@ async function refreshBranchStatus({ full = true } = {}) {
       })
       .catch((e) => detailErrors.push(`OTC 평균 (${e.message})`));
 
-    await runWithConcurrency(mine, 4, async (b) => {
-      if (!b.branchId) {
-        detailErrors.push(`${b.branchName}: branchId 없음`);
-        return;
+    // 오늘 지표도 전 지점 한 콜로 받는다(지점 전환 불필요).
+    // 실패했거나 응답에서 빠진 지점만 아래에서 지점별로 다시 받는다.
+    const needToday = new Set(mine.map((b) => b.branchId).filter(Boolean));
+    try {
+      const byId = await barisFetchAllBranchDashboard(token);
+      for (const b of mine) {
+        const today = byId.get(b.branchId);
+        if (!today) continue;
+        Object.assign(b, today);
+        needToday.delete(b.branchId);
       }
+    } catch (e) {
+      detailErrors.push(`전 지점 오늘 지표 (${e.message})`);
+    }
+    for (const b of mine) {
+      if (!b.branchId) detailErrors.push(`${b.branchName}: branchId 없음`);
+    }
+
+    // 전체 업데이트는 지점별 조회(스파크라인·결제수단)가 남아 전 지점을 돈다.
+    // 폴링은 오늘 지표만 보므로, 전 지점 콜에서 빠진 지점만 돈다(대개 0곳 → 루프 자체가 없다).
+    const perBranch = (full ? mine : mine.filter((b) => needToday.has(b.branchId)))
+      .filter((b) => b.branchId);
+
+    await runWithConcurrency(perBranch, 4, async (b) => {
       // 캘린더 API는 세션의 "현재 지점"에 묶여 있어 지점 전환 토큰이 필요하다.
-      // 지점당 한 번만 전환해 두 조회에 함께 쓴다(전환 실패 시 기본 토큰으로 시도).
+      // 지점당 한 번만 전환해 아래 조회에 함께 쓴다(전환 실패 시 기본 토큰으로 시도).
       let branchToken = token;
       try {
         branchToken = await barisChangeBranch(b.branchId, token);
       } catch (e) {
         detailErrors.push(`${b.branchName}: 지점 전환 실패 (${e.message})`);
       }
-      try {
-        Object.assign(b, await barisFetchBranchDashboard(b.branchId, branchToken));
-      } catch (e) {
-        detailErrors.push(`${b.branchName}: 오늘 지표 (${e.message})`);
+      if (needToday.has(b.branchId)) {
+        try {
+          Object.assign(b, await barisFetchBranchDashboard(b.branchId, branchToken));
+        } catch (e) {
+          detailErrors.push(`${b.branchName}: 오늘 지표 (${e.message})`);
+        }
       }
       if (!full) return; // 폴링은 여기까지 — 아래 7콜은 하루 단위로만 변한다
       try {
@@ -658,7 +680,7 @@ async function refreshBranchStatus({ full = true } = {}) {
     }
   } catch (e) {
     console.warn("[지점 운영 현황 조회 실패]", e?.message || e);
-    // 토큰이 만료되면 폴링을 멈추고 재로그인을 알린다(3분마다 401을 두드리지 않게)
+    // 토큰이 만료되면 폴링을 멈추고 재로그인을 알린다(1분마다 401을 두드리지 않게)
     if (String(e?.message || "").includes("401")) {
       stopBranchPolling();
       if (!full) showToast("바리스 세션이 만료되었습니다. 업데이트로 다시 로그인하세요.");
@@ -1699,7 +1721,29 @@ async function barisFetchBranchStatus(token) {
 }
 
 /**
+ * 전 지점 오늘 실적 + 상품 수 (지점별 조회와 같은 소스, 한 콜).
+ * GET /manage/dashboard/main_all_branch
+ *   payload[{ branch_id, payment{...}, product_count{...} }]
+ *
+ * 지점 전환이 필요 없어 지점 수와 무관하게 1콜이다. 자동 갱신(폴링)은 이 콜 하나로 끝난다.
+ * 이 콜이 실패하거나 응답에서 빠진 지점만 예전 지점별 조회로 채운다.
+ */
+async function barisFetchAllBranchDashboard(token) {
+  const payload = (await barisGet("/manage/dashboard/main_all_branch", token))?.payload;
+  const list = Array.isArray(payload) ? payload : [];
+  const byId = new Map();
+  for (const row of list) {
+    // 다른 바리스 API처럼 오타 키(brnach_id)가 섞일 수 있어 둘 다 받는다
+    const id = row?.branch_id || row?.brnach_id || "";
+    if (!id) continue;
+    byId.set(id, pickBranchDashboard(row));
+  }
+  return byId;
+}
+
+/**
  * 지점 한 곳의 오늘 실적 + 상품 수 (바리스 "운영관리" 페이지와 같은 소스).
+ * 전 지점 조회(main_all_branch)가 실패했을 때의 대체 경로.
  * GET /manage/dashboard/main/{branchID}
  *   payload.payment       : today_payment(주문건수) / today_produce(제조수량) / today_amount(결제금액)
  *   payload.product_count : orderable(주문가능) / total_sellable(판매상품)
@@ -1708,6 +1752,11 @@ async function barisFetchBranchStatus(token) {
  */
 async function barisFetchBranchDashboard(branchID, token) {
   const payload = (await barisGet(`/manage/dashboard/main/${branchID}`, token))?.payload;
+  return pickBranchDashboard(payload);
+}
+
+// 두 조회(지점별/전 지점)가 같은 모양의 payload를 주므로 읽는 자리를 하나로 둔다
+function pickBranchDashboard(payload) {
   const pay = payload?.payment || {};
   const prod = payload?.product_count || {};
   return {
