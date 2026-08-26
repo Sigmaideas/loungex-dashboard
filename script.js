@@ -916,8 +916,10 @@ function sparkline(series) {
   if (max <= 0) return "";
   const [lo, hi] = max > min ? [min, max] : [min - 1, min + 1]; // 완전 평평하면 가운데 선
 
+  // 꼭대기를 띠 맨 위에 딱 붙이면 선 굵기의 절반이 잘려 나가므로 위쪽을 조금 비워 둔다
+  const TOP_PAD = 8;
   const stepX = 100 / (pts.length - 1);
-  const xy = pts.map((v, i) => [i * stepX, 100 - ((v - lo) / (hi - lo)) * 100]);
+  const xy = pts.map((v, i) => [i * stepX, TOP_PAD + (100 - TOP_PAD) * (1 - (v - lo) / (hi - lo))]);
   const line = smoothPath(xy);
   return `
     <svg class="branch-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">

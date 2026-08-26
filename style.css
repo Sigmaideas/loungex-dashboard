@@ -344,20 +344,26 @@ input, select {
 .branch-card {
   position: relative;
   overflow: hidden;
-  min-height: 194px; /* 배경 그래프가 글씨와 겹치지 않을 만큼의 아래 여백 */
-  padding: 20px 22px 26px;
+  /* 카드 아래 그래프 몫으로 떼어 두는 띠의 높이. 아래 padding·min-height가 이 값에 묶여 있다. */
+  --spark-h: 46px;
+  /* 글이 짧은 카드(데이터 없음 등)도 같은 높이로 서게 하는 바닥값.
+     내용이 다 들어찬 카드의 마지막 줄(판매 알약) 아래 끝 + 그래프 띠 만큼. */
+  min-height: 222px;
+  /* 아래 여백은 그래프 띠 + 띠와 글 사이 숨통. 글이 띠 안으로 못 내려온다. */
+  padding: 20px 22px calc(var(--spark-h) + 10px);
   border-radius: 14px;
   box-sizing: border-box;
 }
 
-/* 배경 스파크라인 — 카드 아래쪽에만 옅게 깔아 글씨를 가리지 않는다 */
+/* 배경 스파크라인 — 카드 아래 자기 띠 안에만 그린다.
+   높이를 %로 두면 카드가 길어질 때 띠가 같이 커져 글 뒤로 파고들어서 px로 고정한다. */
 .branch-spark {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
   width: 100%;
-  height: 30%;
+  height: var(--spark-h);
   pointer-events: none;
 }
 .branch-spark .spark-area { fill: rgba(41, 111, 247, 0.09); }
