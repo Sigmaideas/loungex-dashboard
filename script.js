@@ -1908,6 +1908,7 @@ function monthOverMonthChange(lastDays, curDays, now) {
  */
 async function barisFetchPayTypes(branchID, token) {
   const j = await barisGet(`/analysis/sales/graph/${branchID}?tab_cd=ALL`, token);
+  logGraphPayloadShape(j?.payload);
   const list = Array.isArray(j?.payload?.sales_pay_type) ? j.payload.sales_pay_type : [];
   const payTypes = list
     .map((r) => ({
@@ -1918,6 +1919,26 @@ async function barisFetchPayTypes(branchID, token) {
     .filter((r) => r.name && r.count > 0)
     .sort((a, b) => b.count - a.count);
   return { payTypes };
+}
+
+/* 진단용 — 매출분석 응답에 결제수단 말고 또 뭐가 오는지 한 번만 찍는다.
+   시간대별 방문객이 이 응답에 이미 들어 있으면 콜을 새로 붙일 필요가 없다.
+   ※ 시간당 방문객 열을 붙이고 나면 이 함수는 지운다. */
+let graphShapeLogged = false;
+function logGraphPayloadShape(payload) {
+  if (graphShapeLogged || !payload) return;
+  graphShapeLogged = true;
+  const shape = Object.entries(payload).map(([k, v]) => ({
+    키: k,
+    형태: Array.isArray(v) ? `배열(${v.length})` : typeof v,
+    // 배열이면 첫 원소의 키를, 값이면 값 자체를 보여 준다
+    내용: Array.isArray(v)
+      ? (v[0] && typeof v[0] === "object" ? Object.keys(v[0]).join(", ") : String(v[0] ?? ""))
+      : String(v),
+  }));
+  console.info("[매출분석 응답 구조] /analysis/sales/graph — 시간대별 방문객이 여기 있는지 확인용");
+  if (console.table) console.table(shape);
+  else console.info(shape);
 }
 
 /**
