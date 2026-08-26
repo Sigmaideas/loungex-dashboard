@@ -54,6 +54,9 @@ let trendChart = null;
 
 // 지점 운영 현황(바리스 홈과 같은 값). 실시간 상태라 저장하지 않고 화면에서만 쓴다.
 let branchStatusSummary = null;
+// 전체 업데이트가 도는 중인지. 값이 오기 전 "-" 대신 뼈대(스켈레톤)를 보여주는 데만 쓴다.
+// 자동 갱신(폴링)은 이미 화면에 값이 있어 켜지 않는다 — 1분마다 카드가 깜빡이면 안 되니까.
+let branchStatusLoading = false;
 
 /* ============================================================
  *  유틸 / 포맷
@@ -545,6 +548,10 @@ async function refreshBranchStatus({ full = true } = {}) {
   }
   if (branchRefreshing) return;
   branchRefreshing = true;
+  if (full) {
+    branchStatusLoading = true;
+    renderBranchStatus(); // 운영현황 콜을 기다리는 동안 빈 화면 대신 뼈대부터 띄운다
+  }
   try {
     const rows = await barisFetchBranchStatus(token);
     const mine = rows
@@ -612,6 +619,9 @@ async function refreshBranchStatus({ full = true } = {}) {
     } catch (e) {
       detailErrors.push(`전 지점 오늘 지표 (${e.message})`);
     }
+    // 카드에 보이는 값은 여기까지가 전부다(아래 지점별 조회는 그래프·결제비율용).
+    // 나머지 80콜을 기다리지 않고 숫자부터 채워 넣는다.
+    if (full) renderBranchStatus();
     for (const b of mine) {
       if (!b.branchId) detailErrors.push(`${b.branchName}: branchId 없음`);
     }
@@ -690,6 +700,7 @@ async function refreshBranchStatus({ full = true } = {}) {
     if (full) branchStatusSummary = null;
   } finally {
     branchRefreshing = false;
+    branchStatusLoading = false;
   }
   renderBranchStatus();
   // 지점 상세의 "현장 : 앱" 열은 방금 받은 결제수단을 쓰므로 함께 다시 그린다
@@ -813,10 +824,15 @@ function renderBranchStatus() {
   if (!card) return;
   const s = branchStatusSummary;
   if (!s || s.total === 0) {
+    // 받는 중이면 빈 화면 대신 뼈대를 세워 둔다(카드가 뒤늦게 툭 튀어나오지 않게)
+    if (branchStatusLoading) { renderBranchSkeleton(card); return; }
     card.hidden = true;
     return;
   }
   card.hidden = false;
+  // 지점 이름만 오고 숫자는 아직인 구간에도 "받는 중"은 유지한다
+  if (branchStatusLoading) card.setAttribute("aria-busy", "true");
+  else card.removeAttribute("aria-busy");
   document.getElementById("status-total").textContent = `${formatNumber(s.total)}개`;
   document.getElementById("status-operating").textContent = formatNumber(s.operating);
   document.getElementById("status-idle").textContent = formatNumber(s.idle);
@@ -834,6 +850,8 @@ function renderBranchStatus() {
     const cls = b.status === "OPERATING" ? "operating" : b.status === "NO_DATA" ? "nodata" : "idle";
     // 운영중은 카드 색으로 이미 드러나므로 글자로는 예외 상태만 적는다
     const label = b.status === "OPERATING" ? "" : b.status === "NO_DATA" ? "데이터 없음" : "미운영";
+    const foot = cardFootItems(b);
+    const pill = salePill(b);
     return `
       <div class="branch-card ${cls}">
         ${sparkline(b.series)}
@@ -844,14 +862,45 @@ function renderBranchStatus() {
         </div>
         <div class="branch-card-hero">
           <span class="branch-hero-value">${
-            Number.isFinite(b.todayAmount) ? `${formatNumber(b.todayAmount)}<span class="branch-hero-unit">원</span>` : "-"
+            Number.isFinite(b.todayAmount) ? `${formatNumber(b.todayAmount)}<span class="branch-hero-unit">원</span>`
+              : branchStatusLoading ? skBlock("hero") : "-"
           }</span>
           <span class="branch-hero-label">오늘 매출</span>
         </div>
-        <div class="branch-card-foot">${cardFootItems(b).join('<span class="branch-foot-dot">·</span>')}</div>
-        <div class="branch-card-sale">${salePill(b)}</div>
+        <div class="branch-card-foot">${
+          foot.length ? foot.join('<span class="branch-foot-dot">·</span>')
+            : branchStatusLoading ? skBlock("foot") : ""
+        }</div>
+        <div class="branch-card-sale">${pill || (branchStatusLoading ? skBlock("pill") : "")}</div>
       </div>`;
   }).join("");
+}
+
+/* 값이 오기 전 자리를 잡아 두는 회색 블록. 크기는 style.css 의 .sk-* 가 정한다.
+   "-" 를 먼저 보여 주면 데이터가 없는 지점과 구분이 안 돼서 뼈대로 대신한다. */
+function skBlock(kind) {
+  return `<span class="sk sk-${kind}"></span>`;
+}
+
+/* 아직 지점 목록조차 못 받은 동안 세워 두는 뼈대 카드.
+   개수는 이미 알고 있는 지점 수(직전 조회 → 저장된 매장)를 쓰고, 둘 다 없으면 4개로 잡는다. */
+function renderBranchSkeleton(card) {
+  card.hidden = false;
+  card.setAttribute("aria-busy", "true"); // 화면 읽기 프로그램에 "받는 중"을 알린다
+  const known = branchStatusSummary?.total || state.stores.length;
+  const count = Math.min(Math.max(known || 4, 3), 12);
+  document.getElementById("status-total").innerHTML = skBlock("num");
+  document.getElementById("status-operating").innerHTML = skBlock("num-sm");
+  document.getElementById("status-idle").innerHTML = skBlock("num-sm");
+  const bars = document.getElementById("status-bars");
+  if (!bars) return;
+  bars.innerHTML = Array.from({ length: count }, () => `
+    <div class="branch-card nodata" aria-hidden="true">
+      <div class="branch-card-head">${skBlock("name")}</div>
+      <div class="branch-card-hero">${skBlock("hero")}</div>
+      <div class="branch-card-foot">${skBlock("foot")}</div>
+      <div class="branch-card-sale">${skBlock("pill")}</div>
+    </div>`).join("");
 }
 
 /* 카드 아래 한 줄 — 오늘 주문·제조. 라벨이 길어 카드가 복잡해지므로

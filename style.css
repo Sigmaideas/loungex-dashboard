@@ -355,6 +355,44 @@ input, select {
   box-sizing: border-box;
 }
 
+/* ── 로딩 뼈대 ──────────────────────────────────────────────
+   값이 오기 전 자리를 잡아 두는 회색 블록. "-" 를 먼저 보여 주면
+   데이터가 없는 지점과 구분이 안 되고, 숫자가 뒤늦게 툭 바뀌어 보인다.
+   블록 위로 밝은 띠가 한 번씩 지나가 "받는 중"인 걸 알린다. */
+.sk {
+  display: inline-block;
+  border-radius: 6px;
+  background-color: rgba(23, 25, 28, 0.07);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.7) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-repeat: no-repeat;
+  background-size: 140px 100%;
+  animation: sk-sweep 1.3s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+@keyframes sk-sweep {
+  from { background-position: -140px 0; }
+  to   { background-position: calc(100% + 140px) 0; }
+}
+
+/* 각 자리의 크기는 실제로 들어올 글자와 같은 높이로 맞춘다(자리바꿈 방지) */
+.sk-name { width: 86px; height: 17px; }
+.sk-hero { width: 132px; height: 30px; border-radius: 8px; }
+.sk-foot { width: 168px; height: 14px; }
+.sk-pill { width: 118px; height: 26px; border-radius: 999px; }
+.sk-num { width: 46px; height: 20px; }
+.sk-num-sm { width: 20px; height: 14px; }
+
+/* 움직임을 줄이도록 설정한 사용자에게는 띠만 멈추고 자리는 그대로 둔다 */
+@media (prefers-reduced-motion: reduce) {
+  .sk { animation: none; }
+}
+
 /* 배경 스파크라인 — 카드 아래 자기 띠 안에만 그린다.
    높이를 %로 두면 카드가 길어질 때 띠가 같이 커져 글 뒤로 파고들어서 px로 고정한다. */
 .branch-spark {
