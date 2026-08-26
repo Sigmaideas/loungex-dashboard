@@ -519,6 +519,18 @@ async function refreshBranchStatus() {
 
     // 지점별 오늘 실적/상품 수 — 바리스 운영관리 페이지와 같은 소스
     const detailErrors = [];
+
+    // OTC는 전 지점을 한 콜로 받는다(지점 전환 불필요). 지점별 조회와 나란히 돌리고,
+    // 실패해도 나머지 지표는 그대로 간다.
+    const otcTask = barisFetchOtcAll(token)
+      .then((otc) => {
+        for (const b of mine) {
+          const sec = otc.byId.get(b.branchId) ?? otc.byName.get(b.branchName);
+          if (Number.isFinite(sec)) b.otcAvg = sec;
+        }
+      })
+      .catch((e) => detailErrors.push(`OTC 평균 (${e.message})`));
+
     await runWithConcurrency(mine, 4, async (b) => {
       if (!b.branchId) {
         detailErrors.push(`${b.branchName}: branchId 없음`);
@@ -547,12 +559,8 @@ async function refreshBranchStatus() {
       } catch (e) {
         detailErrors.push(`${b.branchName}: 결제수단 (${e.message})`);
       }
-      try {
-        Object.assign(b, await barisFetchOtc(b.branchId, branchToken));
-      } catch (e) {
-        detailErrors.push(`${b.branchName}: OTC (${e.message})`);
-      }
     });
+    await otcTask;
     // 새로운 결제수단이 생기면 알아볼 수 있게 종류를 남긴다
     const payTypeNames = [...new Set(mine.flatMap((b) => (b.payTypes || []).map((p) => p.name)))];
     if (payTypeNames.length) console.info("[결제수단 종류]", payTypeNames.join(", "));
@@ -561,10 +569,10 @@ async function refreshBranchStatus() {
       (b.payTypes || []).map((p) => ({ 지점: b.branchName, 결제수단: p.name, 건수: p.count, 금액: p.amount }))
     );
     if (payRows.length && console.table) console.table(payRows);
-    // OTC는 바리스 결제관리 화면과 대조할 수 있게 표본 수와 함께 남긴다
+    // OTC는 바리스 홈의 지점별 순위 화면과 대조할 수 있게 남긴다
     const otcRows = mine
-      .filter((b) => Number.isFinite(b.otcMedian))
-      .map((b) => ({ 지점: b.branchName, "OTC 중앙값": formatDuration(b.otcMedian), 표본: b.otcSampleCount }));
+      .filter((b) => Number.isFinite(b.otcAvg))
+      .map((b) => ({ 지점: b.branchName, "OTC 평균": formatDuration(b.otcAvg) }));
     if (otcRows.length && console.table) console.table(otcRows);
 
     const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
@@ -1323,8 +1331,8 @@ function getSortedStoreRows(startYM, endYM) {
       case "appRatio": av = payChannelSplit(branchPayTypes(a.store))?.appPct ?? -1;
                        bv = payChannelSplit(branchPayTypes(b.store))?.appPct ?? -1; break;
       // OTC 없는 지점은 정렬 방향과 무관하게 뒤로 밀리도록 큰 값을 준다(짧을수록 좋은 지표)
-      case "otcMedian": av = branchOtcMedian(a.store) ?? Infinity;
-                        bv = branchOtcMedian(b.store) ?? Infinity; break;
+      case "otcAvg": av = branchOtcAvg(a.store) ?? Infinity;
+                     bv = branchOtcAvg(b.store) ?? Infinity; break;
       case "monthlyRent": av = a.monthlyRent; bv = b.monthlyRent; break;
       case "monthlyLabor": av = a.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; bv = b.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; break;
       case "materialCost": av = a.materialCost; bv = b.materialCost; break;
@@ -1352,7 +1360,7 @@ const STORE_COLUMNS = [
   { label: "평균 일누적 방문객", sort: "cumulativeCustomers", center: true, title: "오픈 이후 누적 객수 (객수가 입력된 달 기준)" },
   { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
   { label: "앱 결제비율", sort: "appRatio", center: true, title: "누적 결제 건수 중 앱 결제 비중 · 결제수단이 \"앱 …\"(앱 X-pay·앱 신용카드 등)이면 앱, 나머지는 현장" },
-  { label: "OTC 중앙값", sort: "otcMedian", center: true, title: "OTC(Order to Completion) = 주문 접수 → 제조 완료 · 바리스 결제관리 기준 · 이번 달 최근 300건의 중앙값" },
+  { label: "OTC 평균", sort: "otcAvg", center: true, title: "OTC(Order to Completion) = 주문 접수 → 제조 완료 · 바리스 지점별 순위 기준 · 이번 달 1일~오늘 평균" },
 ];
 
 /* 지점 상세(로컬 매출 데이터)와 바리스 실시간 상태를 잇는다.
@@ -1372,8 +1380,8 @@ function branchStatusOf(store) {
 
 const branchPayTypes = (store) => branchStatusOf(store)?.payTypes;
 
-// OTC 중앙값(초). 아직 못 받았거나 표본이 없으면 undefined → 표에 "-"
-const branchOtcMedian = (store) => branchStatusOf(store)?.otcMedian;
+// OTC 평균(초). 아직 못 받았거나 집계할 주문이 없으면 undefined → 표에 "-"
+const branchOtcAvg = (store) => branchStatusOf(store)?.otcAvg;
 
 // 앱 결제 비중 — 나머지는 현장(키오스크) 결제
 function channelCell(split) {
@@ -1381,7 +1389,7 @@ function channelCell(split) {
   return `<span class="channel-app">${Math.round(split.appPct)}%</span>`;
 }
 
-// OTC 중앙값 — 바리스 결제관리와 같은 "분:초" 표기
+// OTC 평균 — 바리스와 같은 "분:초" 표기
 function otcCell(sec) {
   return Number.isFinite(sec) ? formatDuration(sec) : "-";
 }
@@ -1420,7 +1428,7 @@ function renderStoreTable(startYM, endYM) {
       <td class="num center cell-readonly">${m.customersAll > 0 ? `${formatNumber(m.customersAll)}명` : "-"}</td>
       <td class="num center cell-readonly">${m.avgTicket > 0 ? formatCurrency(m.avgTicket) : "-"}</td>
       <td class="num center cell-readonly">${channelCell(payChannelSplit(branchPayTypes(store)))}</td>
-      <td class="num center cell-readonly">${otcCell(branchOtcMedian(store))}</td>
+      <td class="num center cell-readonly">${otcCell(branchOtcAvg(store))}</td>
     </tr>
   `).join("");
 
@@ -1433,8 +1441,8 @@ function renderStoreTable(startYM, endYM) {
   const meanRevenue = meanOf((r) => r.avgMonthlyRevenue);
   const meanTicket = meanOf((r) => r.avgTicket);
   const meanCustomers = meanOf((r) => r.customersAll);
-  // 전체매장 평균 OTC = 지점별 중앙값의 평균(다른 열과 같은 "매장 평균" 기준)
-  const meanOtc = meanOf((r) => branchOtcMedian(r.store) ?? 0);
+  // 전체매장 평균 OTC = 지점별 평균의 평균(다른 열과 같은 "매장 평균" 기준)
+  const meanOtc = meanOf((r) => branchOtcAvg(r.store) ?? 0);
 
   tfoot.innerHTML = `
     <tr>
@@ -1712,49 +1720,44 @@ async function barisFetchPayTypes(branchID, token) {
 }
 
 /**
- * 지점 한 곳의 OTC 중앙값 (바리스 "결제관리" 화면과 같은 소스).
- * GET /manage/payment/list/{branchID}?page=N&tab_cd=MONTH&order=DESC&orderField=purchase_dttm
- *   payload.list[{ otc: "1:02", ctp: "0:25", status }]  ※ take 는 100 고정(200·500은 400)
+ * 전 지점 OTC 평균 (바리스 홈의 "지점별 누적 매출 순위"와 같은 소스).
+ * GET /home/sales/rank?take=100&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+ *   payload.list[{ branch_id, avg_otc: "1:36", ... }]  ※ 서버가 이미 지점별로 집계해 준다
  *
- * OTC(Order to Completion) = 주문 접수 → 제조 완료. 바리스가 건별로만 주므로 여기서 집계한다.
- * 평균이 아니라 중앙값을 쓰는 이유: 대기열이 밀린 몇 건(10분 이상)이 평균을 1.5배로 부풀린다.
- *   실측(가락IT벤처타워점 이번달 2,492건): 평균 96초 · 중앙값 63초 · 최대 836초.
+ * OTC(Order to Completion) = 주문 접수 → 제조 완료.
+ * 예전에는 지점마다 결제내역 3페이지(300건)를 긁어 중앙값을 냈다. 중앙값이 더 정확하지만
+ * (밀린 몇 건이 평균을 1.5배로 부풀린다) 지점당 3콜이 업데이트에서 가장 느린 구간이라,
+ * 서버가 한 콜로 주는 평균으로 바꿨다. 지점 수와 무관하게 1콜이고 지점 전환도 필요 없다.
  *
- * 이번 달 전체를 훑으면 지점당 28페이지라 최근 OTC_SAMPLE_PAGES 페이지만 본다.
- * 같은 지점 전수(2,492건) 중앙값 63초 vs 최근 300건 64초로 차이가 거의 없다.
- * 취소·미완료 등으로 otc 가 빈 건(약 11%)은 분모에서 뺀다.
+ * 기간은 이번 달 1일~오늘 — 예전 결제내역 조회의 tab_cd=MONTH 와 같은 범위다.
  */
-const OTC_SAMPLE_PAGES = 3; // 페이지당 100건
+async function barisFetchOtcAll(token) {
+  const now = new Date();
+  const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const start = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
+  const j = await barisGet(
+    `/home/sales/rank?page=1&take=100&start_date=${start}&end_date=${ymd(now)}`,
+    token
+  );
+  const list = Array.isArray(j?.payload?.list) ? j.payload.list : [];
+  // 지점 운영 현황과 지점ID로 맞추되, 응답에 오타 키(brnach_id)가 섞이는 API라 이름으로도 받아 둔다
+  const byId = new Map();
+  const byName = new Map();
+  for (const r of list) {
+    const sec = parseDurationToSeconds(r.avg_otc);
+    if (sec === null) continue;
+    const id = r.branch_id || r.brnach_id || "";
+    if (id) byId.set(id, sec);
+    if (r.branch_name) byName.set(String(r.branch_name).trim(), sec);
+  }
+  return { byId, byName }; // 각각 초 단위
+}
 
 // "1:02" / "10:18" → 초. 형식이 다르거나 비어 있으면 null(집계에서 제외).
 function parseDurationToSeconds(text) {
   const m = /^(\d+):([0-5]\d)$/.exec(String(text || "").trim());
   if (!m) return null;
   return Number(m[1]) * 60 + Number(m[2]);
-}
-
-function median(values) {
-  if (values.length === 0) return null;
-  const s = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
-async function barisFetchOtc(branchID, token) {
-  const secs = [];
-  for (let page = 1; page <= OTC_SAMPLE_PAGES; page++) {
-    const j = await barisGet(
-      `/manage/payment/list/${branchID}?page=${page}&tab_cd=MONTH&order=DESC&orderField=purchase_dttm`,
-      token
-    );
-    const p = j?.payload || {};
-    for (const row of p.list || []) {
-      const v = parseDurationToSeconds(row.otc);
-      if (v !== null) secs.push(v);
-    }
-    if (!p.meta?.hasNextPage) break; // 주문이 적은 지점은 일찍 끝낸다
-  }
-  return { otcMedian: median(secs) ?? undefined, otcSampleCount: secs.length };
 }
 
 /* 결제수단 문자열 → 앱 / 현장(키오스크).
