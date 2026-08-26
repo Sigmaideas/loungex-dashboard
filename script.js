@@ -310,6 +310,13 @@ function getStoreMetrics(store, startYM, endYM) {
   // 지점 상세용(전체 기간 기준)
   const withCustomersAll = all.filter((m) => (Number(m.customers) || 0) > 0);
   const customersAll = withCustomersAll.reduce((s, m) => s + Number(m.customers), 0);
+  /* 일평균 방문객 = 누적 객수 ÷ 그 객수가 쌓인 날수.
+     운영일자(오픈~오늘) 전체로 나누면 안 된다 — 객수가 안 들어온 달이 있으면
+     분자에는 없는 날이 분모에만 들어가 평균이 낮게 나온다. 그래서 객수가 있는
+     달의 운영일수만 더해 분모로 쓴다(오픈 중간인 달·이번 달은 자동으로 잘린다). */
+  const customerDaysAll = withCustomersAll.reduce(
+    (s, m) => s + daysInFilteredWindow(store.openDate, m.yearMonth, m.yearMonth), 0);
+  const avgDailyCustomers = customerDaysAll > 0 ? customersAll / customerDaysAll : 0;
   const ticketSumAll = withCustomersAll.reduce((s, m) => s + monthTicket(m) * Number(m.customers), 0);
   const avgTicket = customersAll > 0 ? ticketSumAll / customersAll : 0;
   const totalRevenueAll = all.reduce((s, m) => s + (m.revenue || 0), 0);
@@ -394,6 +401,8 @@ function getStoreMetrics(store, startYM, endYM) {
     customersFiltered,
     ticketSumFiltered,
     customersAll,
+    customerDaysAll,
+    avgDailyCustomers,
     ticketSumAll,
     avgTicket,
   };
@@ -1489,7 +1498,7 @@ function getSortedStoreRows(startYM, endYM) {
       case "avgRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
       // 일평균은 월평균을 30으로 나눈 값이라 정렬 순서는 같지만, 컬럼별 정렬 상태 표시를 위해 따로 둔다
       case "avgDailyRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
-      case "cumulativeCustomers": av = a.customersAll; bv = b.customersAll; break;
+      case "dailyCustomers": av = a.avgDailyCustomers; bv = b.avgDailyCustomers; break;
       case "avgTicket": av = a.avgTicket; bv = b.avgTicket; break;
       case "appRatio": av = payChannelSplit(branchPayTypes(a.store))?.appPct ?? -1;
                        bv = payChannelSplit(branchPayTypes(b.store))?.appPct ?? -1; break;
@@ -1520,7 +1529,7 @@ const STORE_COLUMNS = [
   { label: "지점명", sort: "name" },
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
-  { label: "평균 일누적 방문객", sort: "cumulativeCustomers", center: true, title: "오픈 이후 누적 객수 (객수가 입력된 달 기준)" },
+  { label: "일평균 방문객", sort: "dailyCustomers", center: true, title: "누적 객수 ÷ 운영일수 · 객수가 들어온 달의 일수로만 나눈다" },
   { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
   { label: "앱 결제비율", sort: "appRatio", center: true, title: "누적 결제 건수 중 앱 결제 비중 · 결제수단이 \"앱 …\"(앱 X-pay·앱 신용카드 등)이면 앱, 나머지는 현장" },
   { label: "OTC 평균", sort: "otcAvg", center: true, title: "OTC(Order to Completion) = 주문 접수 → 제조 완료 · 바리스 지점별 순위 기준 · 이번 달 1일~오늘 평균" },
@@ -1588,7 +1597,9 @@ function renderStoreTable(startYM, endYM) {
       <td>${escapeHtml(store.name)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
-      <td class="num center cell-readonly">${m.customersAll > 0 ? `${formatNumber(m.customersAll)}명` : "-"}</td>
+      <td class="num center cell-readonly">${
+        m.avgDailyCustomers > 0 ? `${formatNumber(Math.round(m.avgDailyCustomers))}명` : "-"
+      }</td>
       <td class="num center cell-readonly">${m.avgTicket > 0 ? formatCurrency(m.avgTicket) : "-"}</td>
       <td class="num center cell-readonly">${channelCell(payChannelSplit(branchPayTypes(store)))}</td>
       <td class="num center cell-readonly">${otcCell(branchOtcAvg(store))}</td>
@@ -1603,7 +1614,7 @@ function renderStoreTable(startYM, endYM) {
   };
   const meanRevenue = meanOf((r) => r.avgMonthlyRevenue);
   const meanTicket = meanOf((r) => r.avgTicket);
-  const meanCustomers = meanOf((r) => r.customersAll);
+  const meanCustomers = meanOf((r) => r.avgDailyCustomers);
   // 전체매장 평균 OTC = 지점별 평균의 평균(다른 열과 같은 "매장 평균" 기준)
   const meanOtc = meanOf((r) => branchOtcAvg(r.store) ?? 0);
 
