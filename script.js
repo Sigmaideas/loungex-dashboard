@@ -33,6 +33,24 @@ function getStoreType(store) {
   return store?.type === STORE_TYPE_OWNER ? STORE_TYPE_OWNER : STORE_TYPE_DIRECT;
 }
 
+/* 대시보드에서 빼고 볼 지점.
+   표기가 제각각이라("교보문고 성수점", "교보문고성수") 공백을 지운 뒤 비교한다.
+   바리스에서 받아올 때도, 이미 저장된 데이터에서도 함께 걸러진다. */
+const EXCLUDED_BRANCH_KEYWORDS = ["교보문고성수"];
+function isExcludedBranch(name) {
+  const n = String(name || "").replace(/\s+/g, "");
+  return EXCLUDED_BRANCH_KEYWORDS.some((k) => n.includes(k));
+}
+
+/** 저장본에 남아 있는 제외 지점을 state에서 걷어낸다(월별 매출까지 함께). */
+function dropExcludedStores() {
+  const dropped = new Set(state.stores.filter((s) => isExcludedBranch(s.name)).map((s) => s.id));
+  if (dropped.size === 0) return false;
+  state.stores = state.stores.filter((s) => !dropped.has(s.id));
+  state.monthly = state.monthly.filter((m) => !dropped.has(m.storeId));
+  return true;
+}
+
 /* ---------- 상태 ---------- */
 const state = {
   stores: [],   // {id, name, openDate, openingProfit, operatingProfitRate, totalInvestment}
@@ -187,6 +205,7 @@ function loadFromStorage() {
     state.monthly = parsed.monthly;
     state.materialRate = parsed.materialRate ?? 0.3;
     state.updatedAt = parsed.updatedAt || 0;
+    dropExcludedStores();
     return true;
   } catch {
     return false;
@@ -262,6 +281,7 @@ async function cloudPull() {
     state.monthly = cloud.monthly;
     state.materialRate = cloud.materialRate ?? state.materialRate ?? 0.3;
     state.updatedAt = cloudTime;
+    dropExcludedStores();
     saveLocalOnly();
     return true;
   }
@@ -555,7 +575,7 @@ async function refreshBranchStatus({ full = true } = {}) {
   try {
     const rows = await barisFetchBranchStatus(token);
     const mine = rows
-      .filter((r) => r.branchName.includes(BARIS_BRAND_FILTER))
+      .filter((r) => r.branchName.includes(BARIS_BRAND_FILTER) && !isExcludedBranch(r.branchName))
       .sort((a, b) => a.branchName.localeCompare(b.branchName, "ko"));
     // 폴링에서 다시 받지 않는 값(스파크라인·지난달 대비·결제수단·날씨)은 앞 틱 것을 이어쓴다.
     // 전체 업데이트 전에 새로 생긴 지점은 다음 전체 업데이트 때 채워진다.
@@ -2006,10 +2026,12 @@ async function importFromBaris({ account, password, token: presetToken, startYM,
   const owned = await barisFetchOwnBranches(token);
 
   // "라운지엑스24h" 포함된 지점만 대상
-  const targets = owned.filter((b) =>
-    (b.branchNmKo || "").includes(BARIS_BRAND_FILTER) ||
-    (b.branchNmEn || "").includes(BARIS_BRAND_FILTER)
-  );
+  const targets = owned.filter((b) => {
+    const ko = b.branchNmKo || "";
+    const en = b.branchNmEn || "";
+    if (isExcludedBranch(ko) || isExcludedBranch(en)) return false;
+    return ko.includes(BARIS_BRAND_FILTER) || en.includes(BARIS_BRAND_FILTER);
+  });
 
   if (targets.length === 0) {
     const ownedSummary = owned
@@ -2199,6 +2221,7 @@ async function runBarisImport(importArgs, disableBtns) {
     await cloudPull();
 
     for (const b of result.branches) mergeBarisResult(b);
+    dropExcludedStores();
     const def = getDefaultFilter();
     ui.filterStart = def.start;
     ui.filterEnd = def.end;
