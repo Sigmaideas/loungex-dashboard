@@ -21,6 +21,7 @@ const TARGET = "https://api-baris-v3-backoffice.xyzcorp.io";
 
 // 이 프록시를 호출할 수 있는 프런트엔드 출처(화이트리스트)
 const ALLOW_ORIGINS = [
+  "https://portal.xyzcorp.io",      // GitHub Pages 커스텀 도메인(실제 접속 주소)
   "https://sigmaideas.github.io",
   "http://localhost:8000",
   "http://127.0.0.1:8000",
