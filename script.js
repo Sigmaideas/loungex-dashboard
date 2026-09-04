@@ -72,8 +72,7 @@ let trendChart = null;
 
 // 지점 운영 현황(바리스 홈과 같은 값). 실시간 상태라 저장하지 않고 화면에서만 쓴다.
 let branchStatusSummary = null;
-// 전체 업데이트가 도는 중인지. 값이 오기 전 "-" 대신 뼈대(스켈레톤)를 보여주는 데만 쓴다.
-// 자동 갱신(폴링)은 이미 화면에 값이 있어 켜지 않는다 — 1분마다 카드가 깜빡이면 안 되니까.
+// 업데이트가 도는 중인지. 값이 오기 전 "-" 대신 뼈대(스켈레톤)를 보여주는 데만 쓴다.
 let branchStatusLoading = false;
 
 /* ============================================================
@@ -506,7 +505,6 @@ function renderAll() {
 
 // 로그아웃: 토큰·데이터 삭제 후 잠금 화면
 function logout() {
-  stopBranchPolling();
   localStorage.removeItem(BARIS_TOKEN_STORAGE);
   localStorage.removeItem(STORAGE_KEY);
   state.stores = [];
@@ -519,87 +517,28 @@ function logout() {
 /* ============================================================
  *  KPI
  * ============================================================ */
-/* 지점 카드 자동 갱신 주기.
-   한 틱에 드는 호출은 전지점 3콜(운영현황·OTC·오늘 지표)이 전부다 — 지점 수와 무관하다.
-   스파크라인(6개월 캘린더 6콜)·지난달 대비·결제수단은 하루 단위로만 움직여 폴링에서 뺀다.
-   → 10지점 기준 한 틱 3콜, 전체 업데이트(83콜)의 30분의 1.
-   지점당 2콜이던 시절엔 3분이었지만, 전지점 API로 바뀌어 1분에 3콜이면 충분히 가볍다. */
-const BRANCH_POLL_MS = 60 * 1000;
-let branchPollTimer = null;
-let branchRefreshing = false;   // 앞 틱이 안 끝났으면 건너뛴다(겹침 방지)
-let lastBranchRefreshAt = 0;
-
-function startBranchPolling() {
-  stopBranchPolling();
-  if (!getBarisToken()) return;
-  branchPollTimer = setInterval(pollBranchStatus, BRANCH_POLL_MS);
-}
-
-function stopBranchPolling() {
-  if (branchPollTimer) clearInterval(branchPollTimer);
-  branchPollTimer = null;
-}
-
-// 안 보이는 동안 건너뛴 갱신은 탭이 돌아올 때 한 번 당겨 받는다
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible" || !branchPollTimer) return;
-  if (Date.now() - lastBranchRefreshAt >= BRANCH_POLL_MS) pollBranchStatus();
-});
-
-function pollBranchStatus() {
-  // 안 보이는 탭에서는 호출하지 않는다(다시 보일 때 밀린 만큼 한 번 당겨 받는다)
-  if (document.visibilityState !== "visible") return;
-  if (!getBarisToken()) { stopBranchPolling(); return; }
-  refreshBranchStatus({ full: false });
-}
+let branchRefreshing = false;   // 앞 요청이 안 끝났으면 건너뛴다(업데이트 연타 방지)
 
 /**
  * 바리스에서 지점 운영 상태를 받아 "라운지엑스24h" 지점만 집계.
- *   full: true  — 전체 업데이트. 스파크라인·지난달 대비·결제수단까지 새로 받는다.
- *   full: false — 자동 갱신(폴링). 오늘 지표와 상태·OTC만 받고 나머지는 앞 값을 이어쓴다.
+ * "업데이트"를 누를 때(와 첫 로드)만 돈다 — 주기적 자동 갱신은 없다.
  */
-async function refreshBranchStatus({ full = true } = {}) {
+async function refreshBranchStatus() {
   const token = getBarisToken();
   if (!token) {
-    stopBranchPolling();
     branchStatusSummary = null;
     renderBranchStatus();
     return;
   }
   if (branchRefreshing) return;
   branchRefreshing = true;
-  if (full) {
-    branchStatusLoading = true;
-    renderBranchStatus(); // 운영현황 콜을 기다리는 동안 빈 화면 대신 뼈대부터 띄운다
-  }
+  branchStatusLoading = true;
+  renderBranchStatus(); // 운영현황 콜을 기다리는 동안 빈 화면 대신 뼈대부터 띄운다
   try {
     const rows = await barisFetchBranchStatus(token);
     const mine = rows
       .filter((r) => r.branchName.includes(BARIS_BRAND_FILTER) && !isExcludedBranch(r.branchName))
       .sort((a, b) => a.branchName.localeCompare(b.branchName, "ko"));
-    // 폴링에서 다시 받지 않는 값(스파크라인·지난달 대비·결제수단·날씨)은 앞 틱 것을 이어쓴다.
-    // 전체 업데이트 전에 새로 생긴 지점은 다음 전체 업데이트 때 채워진다.
-    if (!full) {
-      const prev = new Map((branchStatusSummary?.branches || []).map((b) => [b.branchId, b]));
-      for (const b of mine) {
-        const old = prev.get(b.branchId);
-        if (!old) continue;
-        Object.assign(b, {
-          series: old.series,
-          monthChange: old.monthChange,
-          payTypes: old.payTypes,
-          todayWeather: old.todayWeather,
-          // 오늘 지표도 일단 이어받는다 — 아래에서 새 값으로 덮이고,
-          // 조회가 실패한 지점만 앞 값이 남는다("-"로 깜빡이지 않게)
-          todayAmount: old.todayAmount,
-          todayOrders: old.todayOrders,
-          todayProduced: old.todayProduced,
-          orderable: old.orderable,
-          sellable: old.sellable,
-          otcAvg: old.otcAvg,
-        });
-      }
-    }
     const operating = mine.filter((r) => r.status === "OPERATING").length;
     branchStatusSummary = {
       total: mine.length,
@@ -607,9 +546,8 @@ async function refreshBranchStatus({ full = true } = {}) {
       idle: mine.length - operating,
       branches: mine,
     };
-    // 전체 업데이트는 상태 타일을 먼저 그리고 주문가능 수를 받는 대로 채운다.
-    // 폴링은 이미 화면에 값이 있어 중간 렌더를 건너뛴다(깜빡임 방지).
-    if (full) renderBranchStatus();
+    // 상태 타일을 먼저 그리고, 주문가능 수는 받는 대로 채운다.
+    renderBranchStatus();
 
     // 지점별 오늘 실적/상품 수 — 바리스 운영관리 페이지와 같은 소스
     const detailErrors = [];
@@ -641,15 +579,13 @@ async function refreshBranchStatus({ full = true } = {}) {
     }
     // 카드에 보이는 값은 여기까지가 전부다(아래 지점별 조회는 그래프·결제비율용).
     // 나머지 80콜을 기다리지 않고 숫자부터 채워 넣는다.
-    if (full) renderBranchStatus();
+    renderBranchStatus();
     for (const b of mine) {
       if (!b.branchId) detailErrors.push(`${b.branchName}: branchId 없음`);
     }
 
-    // 전체 업데이트는 지점별 조회(스파크라인·결제수단)가 남아 전 지점을 돈다.
-    // 폴링은 오늘 지표만 보므로, 전 지점 콜에서 빠진 지점만 돈다(대개 0곳 → 루프 자체가 없다).
-    const perBranch = (full ? mine : mine.filter((b) => needToday.has(b.branchId)))
-      .filter((b) => b.branchId);
+    // 스파크라인·결제수단은 지점별 조회라 전 지점을 돈다.
+    const perBranch = mine.filter((b) => b.branchId);
 
     await runWithConcurrency(perBranch, 4, async (b) => {
       // 캘린더 API는 세션의 "현재 지점"에 묶여 있어 지점 전환 토큰이 필요하다.
@@ -667,7 +603,6 @@ async function refreshBranchStatus({ full = true } = {}) {
           detailErrors.push(`${b.branchName}: 오늘 지표 (${e.message})`);
         }
       }
-      if (!full) return; // 폴링은 여기까지 — 아래 7콜은 하루 단위로만 변한다
       try {
         Object.assign(b, await barisFetchDailySeries(b.branchId, branchToken));
       } catch (e) {
@@ -680,47 +615,40 @@ async function refreshBranchStatus({ full = true } = {}) {
       }
     });
     await otcTask;
-    lastBranchRefreshAt = Date.now();
-    if (detailErrors.length) {
-      console.warn(full ? "[지점 상세 조회 실패]" : "[지점 자동 갱신 일부 실패]", detailErrors);
-    }
+    if (detailErrors.length) console.warn("[지점 상세 조회 실패]", detailErrors);
 
-    if (full) {
-      startBranchPolling(); // 전체 업데이트를 받은 시점부터 자동 갱신 시작
-      // 새로운 결제수단이 생기면 알아볼 수 있게 종류를 남긴다
-      const payTypeNames = [...new Set(mine.flatMap((b) => (b.payTypes || []).map((p) => p.name)))];
-      if (payTypeNames.length) console.info("[결제수단 종류]", payTypeNames.join(", "));
-      // 바리스 매출분석 화면과 숫자를 직접 대조할 수 있게 원본을 남긴다
-      const payRows = mine.flatMap((b) =>
-        (b.payTypes || []).map((p) => ({ 지점: b.branchName, 결제수단: p.name, 건수: p.count, 금액: p.amount }))
-      );
-      if (payRows.length && console.table) console.table(payRows);
-      // OTC는 바리스 홈의 지점별 순위 화면과 대조할 수 있게 남긴다
-      const otcRows = mine
-        .filter((b) => Number.isFinite(b.otcAvg))
-        .map((b) => ({ 지점: b.branchName, "OTC 평균": formatDuration(b.otcAvg) }));
-      if (otcRows.length && console.table) console.table(otcRows);
+    // 새로운 결제수단이 생기면 알아볼 수 있게 종류를 남긴다
+    const payTypeNames = [...new Set(mine.flatMap((b) => (b.payTypes || []).map((p) => p.name)))];
+    if (payTypeNames.length) console.info("[결제수단 종류]", payTypeNames.join(", "));
+    // 바리스 매출분석 화면과 숫자를 직접 대조할 수 있게 원본을 남긴다
+    const payRows = mine.flatMap((b) =>
+      (b.payTypes || []).map((p) => ({ 지점: b.branchName, 결제수단: p.name, 건수: p.count, 금액: p.amount }))
+    );
+    if (payRows.length && console.table) console.table(payRows);
+    // OTC는 바리스 홈의 지점별 순위 화면과 대조할 수 있게 남긴다
+    const otcRows = mine
+      .filter((b) => Number.isFinite(b.otcAvg))
+      .map((b) => ({ 지점: b.branchName, "OTC 평균": formatDuration(b.otcAvg) }));
+    if (otcRows.length && console.table) console.table(otcRows);
 
-      const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
-      const graphed = mine.filter((b) => (b.series || []).length > 0).length;
-      // 오늘 지표든 배경 그래프든 전 지점이 비면 원인을 화면에도 알린다
-      if ((ok === 0 || graphed === 0) && detailErrors.length) {
-        showToast(`지점 상세 조회 실패 — ${detailErrors[0]}`);
-      }
+    const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
+    const graphed = mine.filter((b) => (b.series || []).length > 0).length;
+    // 오늘 지표든 배경 그래프든 전 지점이 비면 원인을 화면에도 알린다
+    if ((ok === 0 || graphed === 0) && detailErrors.length) {
+      showToast(`지점 상세 조회 실패 — ${detailErrors[0]}`);
     }
   } catch (e) {
     console.warn("[지점 운영 현황 조회 실패]", e?.message || e);
-    // 토큰이 만료되면 폴링을 멈추고 재로그인을 알린다(1분마다 401을 두드리지 않게)
-    if (String(e?.message || "").includes("401")) {
-      stopBranchPolling();
-      if (!full) showToast("바리스 세션이 만료되었습니다. 업데이트로 다시 로그인하세요.");
-    }
-    // 전체 업데이트 실패는 카드 자체를 감추고(빈 값 표시 방지),
-    // 자동 갱신 실패는 화면을 건드리지 않고 앞 값을 그대로 둔다.
-    if (full) branchStatusSummary = null;
+    // 조회에 실패하면 카드 자체를 감춘다(빈 값 표시 방지)
+    branchStatusSummary = null;
   } finally {
     branchRefreshing = false;
     branchStatusLoading = false;
+    // 임포트와 겹친 달이 실제로 재사용됐는지 남긴다(hit 0이면 두 API의 지점ID가 안 맞는 것)
+    if (calendarStats.hit || calendarStats.miss) {
+      console.info(`[매출 캘린더] 호출 ${calendarStats.miss}회 / 캐시 재사용 ${calendarStats.hit}회`);
+    }
+    clearCalendarCache(); // 임포트와 나눠 쓰는 구간은 여기까지
   }
   renderBranchStatus();
   // 지점 상세의 "현장 : 앱" 열은 방금 받은 결제수단을 쓰므로 함께 다시 그린다
@@ -933,13 +861,7 @@ function cardFootItems(b) {
   if (Number.isFinite(b.todayProduced)) {
     items.push(`<span>제조 <b>${formatNumber(b.todayProduced)}</b>잔</span>`);
   }
-  // OTC는 이번 달 평균이라 "오늘"이 아니다. 라벨로 구분되니 같은 줄에 둔다.
-  if (Number.isFinite(b.otcAvg)) {
-    items.push(
-      `<span title="OTC(Order to Completion) = 주문 접수 → 제조 완료 · 이번 달 1일~오늘 평균">` +
-      `OTC <b>${formatDuration(b.otcAvg)}</b></span>`
-    );
-  }
+  // OTC는 카드에서 빼고 지점 상세 표에서만 본다(카드는 "오늘" 지표만 남긴다).
   return items; // 값이 하나도 없으면 상태 칩("데이터 없음")만 남기고 비워 둔다
 }
 
@@ -1712,6 +1634,46 @@ async function barisGet(path, token) {
   return r.json();
 }
 
+/* ── 매출 캘린더 응답 캐시 ────────────────────────────────────
+ *  /analysis/sales/calendar/{지점}/{YYYYMM} 한 응답 안에 월 합계(payload.*)와
+ *  일별 데이터(payload.data)가 같이 들어 있다. 그런데 매출 임포트(월 합계)와
+ *  카드 스파크라인(일별)이 각자 같은 URL을 불러, 겹치는 달만큼 콜이 두 배였다.
+ *  ("업데이트" 1회에 10지점 × 6개월 = 60콜이 순수 중복)
+ *
+ *  그래서 "업데이트" 한 번 도는 동안만 응답을 재사용한다.
+ *  - 채우기: 임포트가 먼저 돌며 담고, 뒤이은 지점 카드 조회가 겹치는 달을 그대로 쓴다.
+ *  - 비우기: 업데이트 시작 시(runBarisImport)와 카드 조회가 끝날 때(refreshBranchStatus).
+ *    → 다음 "업데이트"는 항상 새 응답을 받는다. 오래된 값이 남지 않게 TTL 대신 이 방식을 쓴다.
+ *  - 응답 객체는 두 곳이 나눠 읽으므로 읽기만 하고 고치지 않는다.
+ *
+ *  캐시 키가 (지점, 연월)뿐인 이유: 이 API는 세션의 "현재 지점"에 묶여 있지만
+ *  두 호출 모두 같은 지점으로 전환한 토큰을 쓰므로 응답 내용은 이 둘로만 정해진다. */
+const calendarCache = new Map(); // "지점ID/YYYYMM" → Promise<응답 JSON>
+const calendarStats = { hit: 0, miss: 0 };
+
+/* 지점ID는 임포트가 /xmanager/branches/own 의 branchID 를, 카드 조회가
+   /home/robots/overview/detail 의 branch_id 를 쓴다. 같은 지점을 가리키지만
+   대소문자·공백까지 같다는 보장은 없어 키를 맞춰 둔다. */
+const calendarKey = (branchID, yyyymm) => `${String(branchID).trim().toLowerCase()}/${yyyymm}`;
+
+function barisFetchCalendar(branchID, yyyymm, token) {
+  const key = calendarKey(branchID, yyyymm);
+  const hit = calendarCache.get(key);
+  if (hit) { calendarStats.hit++; return hit; }
+  calendarStats.miss++;
+  // 실패한 응답은 캐시에 남기지 않는다(다음 호출이 다시 시도할 수 있게)
+  const task = barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, token)
+    .catch((e) => { calendarCache.delete(key); throw e; });
+  calendarCache.set(key, task);
+  return task;
+}
+
+function clearCalendarCache() {
+  calendarCache.clear();
+  calendarStats.hit = 0;
+  calendarStats.miss = 0;
+}
+
 /**
  * 한 달치 매출 + 객수 조회 (바리스 매출 캘린더 화면과 같은 소스).
  *  매출
@@ -1725,7 +1687,7 @@ async function barisGet(path, token) {
  */
 async function barisFetchMonthSales(branchID, ym, token) {
   const yyyymm = ym.replace("-", "");
-  const j = await barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, token);
+  const j = await barisFetchCalendar(branchID, yyyymm, token);
   const p = j?.payload || {};
   const actual = Number(p.tot_sell_month || 0);
   const refund = Number(p.tot_refund_month || 0);
@@ -1791,7 +1753,7 @@ async function barisFetchBranchStatus(token) {
  * GET /manage/dashboard/main_all_branch
  *   payload[{ branch_id, payment{...}, product_count{...} }]
  *
- * 지점 전환이 필요 없어 지점 수와 무관하게 1콜이다. 자동 갱신(폴링)은 이 콜 하나로 끝난다.
+ * 지점 전환이 필요 없어 지점 수와 무관하게 1콜이다.
  * 이 콜이 실패하거나 응답에서 빠진 지점만 예전 지점별 조회로 채운다.
  */
 async function barisFetchAllBranchDashboard(token) {
@@ -1846,6 +1808,7 @@ function toFiniteNumber(v) {
  *   payload.data[{ date: "YYYYMMDD", tot_sell_today, tot_refund_today, weather }]
  *
  * 여섯 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
+ * 업데이트 흐름에서는 앞선 매출 임포트가 같은 응답을 이미 받아 두므로 대부분 캐시로 끝난다.
  */
 async function barisFetchDailySeries(branchID, token) {
   const now = new Date();
@@ -1867,7 +1830,7 @@ async function barisFetchDailySeries(branchID, token) {
 }
 
 async function barisFetchMonthDays(branchID, yyyymm, token) {
-  const j = await barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, token);
+  const j = await barisFetchCalendar(branchID, yyyymm, token);
   return (j?.payload?.data || [])
     .map((r) => ({
       date: String(r.date),
@@ -2209,6 +2172,8 @@ async function runBarisImport(importArgs, disableBtns) {
   const startYM = BARIS_DEFAULT_START_YM;
   const endYM = getCurrentYM();
   disableBtns(true);
+  clearCalendarCache(); // 이번 업데이트는 항상 새 응답으로 시작한다
+  let cardsStarted = false; // 카드 조회까지 갔는지 — 캐시를 누가 비울지 정한다
   try {
     const result = await importFromBaris({
       ...importArgs, startYM, endYM,
@@ -2230,7 +2195,9 @@ async function runBarisImport(importArgs, disableBtns) {
     saveToStorage();
     renderAll();
 
+    // 여기서 임포트가 받아 둔 캘린더 응답을 스파크라인이 이어 쓴다(캐시는 이쪽 finally가 비운다)
     refreshBranchStatus();
+    cardsStarted = true;
 
     // 병합 결과를 클라우드에 자동 저장 → 모든 기기 공통
     await cloudSave({ silent: true });
@@ -2244,6 +2211,8 @@ async function runBarisImport(importArgs, disableBtns) {
     showToast(`${result.branches.length}개 지점을 업데이트했습니다.`);
     setTimeout(closeBarisModal, 1800);
   } catch (err) {
+    // 카드 조회가 이미 돌고 있으면 손대지 않는다(그쪽이 캐시를 쓰는 중이다)
+    if (!cardsStarted) clearCalendarCache();
     const msg = err.message || String(err);
     // 토큰 만료(401) 등 인증 실패면 로그인 재요청
     if (/401|로그인|관리자 정보/.test(msg)) {
