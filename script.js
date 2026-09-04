@@ -25,6 +25,26 @@ const BARIS_TOKEN_STORAGE = "loungex_baris_token";
 const getBarisToken = () => localStorage.getItem(BARIS_TOKEN_STORAGE) || "";
 const setBarisToken = (t) => { if (t) localStorage.setItem(BARIS_TOKEN_STORAGE, t); };
 
+/* 화면 섹션 on/off — 서버 부하로 무거운 섹션을 잠시 내려둔다.
+ * 앞의 셋은 그리기만 하고 API를 부르지 않는다. branchSparkline 만 서버 콜을 만든다.
+ * 다시 켤 때: 값을 true 로 바꾸고, index.html 의 같은 섹션 주석도 함께 푼다
+ *            (branchSparkline 은 index.html 손댈 곳 없음). */
+const SECTIONS = {
+  revenueShareChart: false, // 매장별 매출 비중
+  trendChart: false,        // 월별 매출 추이 (지점별)
+  storeDetail: false,       // 지점 상세 테이블
+  // 지점 카드의 배경 그래프 + "지난달 대비". 이것만 지점 수 × 최대 6개월치 캘린더를
+  // 지점별로 부른다 — 첫 로드 콜의 대부분이 여기서 나온다. 카드의 오늘 지표는 그대로 나온다.
+  branchSparkline: false,
+};
+
+/* 바리스 서버에 동시에 던지는 요청 수. 서버가 부하로 멈춘 뒤 낮춰 잡았다.
+ * 올리면 업데이트가 빨라지는 대신 서버 순간 부하가 그만큼 커진다. */
+const BARIS_CONCURRENCY = {
+  branchDetail: 2, // 지점별 상세 조회(배경 그래프) — branchSparkline 이 켜졌을 때만 쓴다
+  monthSales: 3,   // 한 지점 안에서 여러 달 매출을 동시에 받는 수
+};
+
 const STORE_TYPE_DIRECT = "직영모델";
 const STORE_TYPE_OWNER = "점주투자모델";
 const STORE_TYPES = [STORE_TYPE_DIRECT, STORE_TYPE_OWNER];
@@ -147,6 +167,16 @@ const monthsRange = (startYM, endYM) => {
 };
 
 const inRange = (ym, startYM, endYM) => ym >= startYM && ym <= endYM;
+
+/* ── 확정된 달 ──────────────────────────────────────────────
+ *  이번 달은 계속 쌓이는 중이고, 직전 달은 바리스에서 사후 정정될 수 있다.
+ *  그보다 앞선 달의 매출·일별 실적은 더 바뀌지 않으므로 "확정"으로 보고 다시 받지 않는다.
+ *  → 업데이트 때마다 받는 달은 지점당 2개월뿐이다. */
+const prevYM = (ym) => {
+  const [y, m] = ym.split("-").map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${pad(m - 1)}`;
+};
+const isSettledYM = (ym) => ym < prevYM(getCurrentYM());
 
 /* ── 월 임대료: 고정 금액 또는 "매출 %" 두 가지 방식 ──
  * store.monthlyRentRate 가 있으면(예: 0.1) 임대료 = 월평균 매출(VAT 별도) × 비율,
@@ -285,6 +315,7 @@ async function cloudPull() {
 
 function resetStorage() {
   localStorage.removeItem(STORAGE_KEY);
+  clearDayCache(); // 저장된 매출을 지웠으니 확정 월 캐시도 같이 버린다
   state.stores = [];
   state.monthly = [];
 }
@@ -489,18 +520,21 @@ function renderAll() {
   const endYM = ui.filterEnd;
 
   renderKPI(startYM, endYM);
-  renderChart(startYM, endYM);
-  renderTrendChart(startYM, endYM);
-  renderStoreTable(startYM, endYM);
+  if (SECTIONS.revenueShareChart) renderChart(startYM, endYM);
+  if (SECTIONS.trendChart) renderTrendChart(startYM, endYM);
+  if (SECTIONS.storeDetail) renderStoreTable(startYM, endYM);
 
-  document.getElementById("chart-period").textContent =
-    state.stores.length === 0 ? "" : `${startYM} ~ ${endYM}`;
+  const periodEl = document.getElementById("chart-period");
+  if (periodEl) {
+    periodEl.textContent = state.stores.length === 0 ? "" : `${startYM} ~ ${endYM}`;
+  }
 }
 
 // 로그아웃: 토큰·데이터 삭제 후 잠금 화면
 function logout() {
   localStorage.removeItem(BARIS_TOKEN_STORAGE);
   localStorage.removeItem(STORAGE_KEY);
+  clearDayCache();
   state.stores = [];
   state.monthly = [];
   state.updatedAt = 0;
@@ -567,27 +601,27 @@ async function refreshBranchStatus() {
       if (!b.branchId) detailErrors.push(`${b.branchName}: branchId 없음`);
     }
 
-    // 스파크라인은 지점별 조회라 전 지점을 돈다.
-    const perBranch = mine.filter((b) => b.branchId);
+    // 스파크라인은 지점별 조회라 전 지점을 돈다 — 첫 로드 콜의 대부분이 여기서 나온다.
+    // 꺼 두면 위의 전 지점 한 콜(오늘 지표)까지가 전부다.
+    // 응답에서 빠진 지점의 오늘 지표는 그만큼 못 채우지만, 그 값 하나 때문에
+    // 전 지점 × 6개월 조회를 되살리지는 않는다.
+    const perBranch = SECTIONS.branchSparkline ? mine.filter((b) => b.branchId) : [];
 
-    await runWithConcurrency(perBranch, 4, async (b) => {
+    await runWithConcurrency(perBranch, BARIS_CONCURRENCY.branchDetail, async (b) => {
       // 캘린더 API는 세션의 "현재 지점"에 묶여 있어 지점 전환 토큰이 필요하다.
-      // (전환 실패 시 기본 토큰으로 시도)
-      let branchToken = token;
-      try {
-        branchToken = await barisChangeBranch(b.branchId, token);
-      } catch (e) {
-        detailErrors.push(`${b.branchName}: 지점 전환 실패 (${e.message})`);
-      }
+      // 다만 확정된 달이 전부 캐시로 끝나면 받을 게 없으므로, 전환은 실제 조회가 생길 때 한 번만 한다.
+      const getToken = branchTokenGetter(b.branchId, token, (e) =>
+        detailErrors.push(`${b.branchName}: 지점 전환 실패 (${e.message})`)
+      );
       if (needToday.has(b.branchId)) {
         try {
-          Object.assign(b, await barisFetchBranchDashboard(b.branchId, branchToken));
+          Object.assign(b, await barisFetchBranchDashboard(b.branchId, await getToken()));
         } catch (e) {
           detailErrors.push(`${b.branchName}: 오늘 지표 (${e.message})`);
         }
       }
       try {
-        Object.assign(b, await barisFetchDailySeries(b.branchId, branchToken));
+        Object.assign(b, await barisFetchDailySeries(b.branchId, getToken));
       } catch (e) {
         detailErrors.push(`${b.branchName}: 일별 실적 (${e.message})`);
       }
@@ -595,7 +629,10 @@ async function refreshBranchStatus() {
     if (detailErrors.length) console.warn("[지점 상세 조회 실패]", detailErrors);
 
     const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
-    const graphed = mine.filter((b) => (b.series || []).length > 0).length;
+    // 스파크라인을 꺼 두면 그래프가 비는 게 정상이라 실패로 세지 않는다
+    const graphed = SECTIONS.branchSparkline
+      ? mine.filter((b) => (b.series || []).length > 0).length
+      : 1;
     // 오늘 지표든 배경 그래프든 전 지점이 비면 원인을 화면에도 알린다
     if ((ok === 0 || graphed === 0) && detailErrors.length) {
       showToast(`지점 상세 조회 실패 — ${detailErrors[0]}`);
@@ -611,6 +648,7 @@ async function refreshBranchStatus() {
     if (calendarStats.hit || calendarStats.miss) {
       console.info(`[매출 캘린더] 호출 ${calendarStats.miss}회 / 캐시 재사용 ${calendarStats.hit}회`);
     }
+    flushDayCache();      // 이번에 새로 받은 확정 월을 남긴다
     clearCalendarCache(); // 임포트와 나눠 쓰는 구간은 여기까지
   }
   renderBranchStatus();
@@ -1571,14 +1609,18 @@ const calendarStats = { hit: 0, miss: 0 };
    대소문자·공백까지 같다는 보장은 없어 키를 맞춰 둔다. */
 const calendarKey = (branchID, yyyymm) => `${String(branchID).trim().toLowerCase()}/${yyyymm}`;
 
+/* token 자리에는 토큰 문자열도, 토큰을 주는 함수도 넣을 수 있다.
+   함수면 캐시가 빗나갔을 때만 부른다 — 그래야 지점 전환을 미룰 수 있다. */
 function barisFetchCalendar(branchID, yyyymm, token) {
   const key = calendarKey(branchID, yyyymm);
   const hit = calendarCache.get(key);
   if (hit) { calendarStats.hit++; return hit; }
   calendarStats.miss++;
   // 실패한 응답은 캐시에 남기지 않는다(다음 호출이 다시 시도할 수 있게)
-  const task = barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, token)
-    .catch((e) => { calendarCache.delete(key); throw e; });
+  const task = (async () => {
+    const t = typeof token === "function" ? await token() : token;
+    return barisGet(`/analysis/sales/calendar/${branchID}/${yyyymm}`, t);
+  })().catch((e) => { calendarCache.delete(key); throw e; });
   calendarCache.set(key, task);
   return task;
 }
@@ -1587,6 +1629,69 @@ function clearCalendarCache() {
   calendarCache.clear();
   calendarStats.hit = 0;
   calendarStats.miss = 0;
+}
+
+/* ── 확정된 달의 일별 실적 캐시(localStorage) ─────────────────
+ *  카드 배경 스파크라인은 6개월치 일별 매출을 쓰는데, 확정된 달은 값이 더 바뀌지 않는다.
+ *  한 번 받아 두면 다음 업데이트부터는 이번 달·직전 달만 새로 받으면 된다.
+ *  이게 없으면 매출 임포트에서 아낀 만큼을 스파크라인이 그대로 다시 쓴다. */
+const DAY_CACHE_KEY = "loungex_day_cache_v1";
+const DAY_CACHE_MONTHS = 6; // 스파크라인이 보는 창 — 이보다 오래된 달은 버린다
+
+let dayCache = null;       // { "지점ID/YYYYMM": [{ date, sales, weather }] }
+let dayCacheDirty = false;
+
+function getDayCache() {
+  if (dayCache) return dayCache;
+  try {
+    const raw = localStorage.getItem(DAY_CACHE_KEY);
+    dayCache = raw ? JSON.parse(raw) : {};
+  } catch {
+    dayCache = {}; // 깨진 캐시는 버리고 새로 받는다
+  }
+  return dayCache;
+}
+
+// 스파크라인 창을 벗어난 달은 버리고 저장한다(용량이 무한정 늘지 않게)
+function flushDayCache() {
+  if (!dayCacheDirty || !dayCache) return;
+  const d = new Date();
+  d.setDate(1); // 말일에 setMonth 가 달을 건너뛰지 않게 먼저 1일로 맞춘다
+  d.setMonth(d.getMonth() - (DAY_CACHE_MONTHS - 1));
+  const oldest = `${d.getFullYear()}${pad(d.getMonth() + 1)}`;
+  for (const key of Object.keys(dayCache)) {
+    if (String(key).split("/")[1] < oldest) delete dayCache[key];
+  }
+  try {
+    localStorage.setItem(DAY_CACHE_KEY, JSON.stringify(dayCache));
+    dayCacheDirty = false;
+  } catch (e) {
+    // 용량 초과 등 — 저장만 실패하고 조회는 그대로 돈다
+    console.warn("[일별 캐시 저장 실패]", e?.message || e);
+  }
+}
+
+function clearDayCache() {
+  dayCache = {};
+  dayCacheDirty = false;
+  localStorage.removeItem(DAY_CACHE_KEY);
+}
+
+/* 지점 전환(1콜)은 실제로 받을 게 있을 때만 한다.
+   확정된 달이 전부 캐시로 끝나면 전환 자체가 일어나지 않는다.
+   한 지점 안에서 여러 조회가 동시에 부르므로 진행 중인 전환을 공유한다.
+   전환에 실패하면 예전처럼 기본 토큰으로 시도한다. */
+function branchTokenGetter(branchID, baseToken, onError) {
+  let task = null;
+  return () => {
+    if (!task) {
+      task = barisChangeBranch(branchID, baseToken).catch((e) => {
+        onError?.(e);
+        return baseToken;
+      });
+    }
+    return task;
+  };
 }
 
 /**
@@ -1723,7 +1828,8 @@ function toFiniteNumber(v) {
  *   payload.data[{ date: "YYYYMMDD", tot_sell_today, tot_refund_today, weather }]
  *
  * 여섯 달치를 이어 붙여 카드 배경 스파크라인을 그리고, "지난달 대비"는 지난달·이번 달만 쓴다.
- * 업데이트 흐름에서는 앞선 매출 임포트가 같은 응답을 이미 받아 두므로 대부분 캐시로 끝난다.
+ * 확정된 달은 localStorage 캐시에서 바로 나오고, 이번 달·직전 달은 앞선 매출 임포트가
+ * 같은 응답을 이미 받아 둔다. 그래서 보통 이 함수는 콜 하나 없이 끝난다.
  */
 async function barisFetchDailySeries(branchID, token) {
   const now = new Date();
@@ -1745,8 +1851,13 @@ async function barisFetchDailySeries(branchID, token) {
 }
 
 async function barisFetchMonthDays(branchID, yyyymm, token) {
+  const settled = isSettledYM(`${yyyymm.slice(0, 4)}-${yyyymm.slice(4)}`);
+  const key = `${branchID}/${yyyymm}`;
+  const cache = getDayCache();
+  if (settled && Array.isArray(cache[key])) return cache[key];
+
   const j = await barisFetchCalendar(branchID, yyyymm, token);
-  return (j?.payload?.data || [])
+  const days = (j?.payload?.data || [])
     .map((r) => ({
       date: String(r.date),
       // 매출은 환불을 뺀 순매출 (지점 상세의 월 매출과 같은 기준)
@@ -1754,6 +1865,10 @@ async function barisFetchMonthDays(branchID, yyyymm, token) {
       weather: r.weather || "",
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
+
+  // 확정된 달만 남긴다 — 이번 달·직전 달은 다음 업데이트에서 다시 받아야 한다
+  if (settled) { cache[key] = days; dayCacheDirty = true; }
+  return days;
 }
 
 /**
@@ -1840,26 +1955,35 @@ async function importFromBaris({ account, password, token: presetToken, startYM,
   }
 
   const months = monthsRange(startYM, endYM);
-  const total = targets.length * months.length;
+  // 확정된 달은 이미 저장된 값을 쓴다 — 지점마다 실제로 받을 달만 추린다
+  const plans = targets.map((b) => ({ branch: b, months: monthsToFetch(b.branchID, months) }));
+  const total = plans.reduce((sum, p) => sum + p.months.length, 0);
+  const skipped = targets.length * months.length - total;
   let done = 0;
   const branchResults = [];
 
-  for (let i = 0; i < targets.length; i++) {
-    const b = targets[i];
+  for (let i = 0; i < plans.length; i++) {
+    const { branch: b, months: wanted } = plans[i];
     const branchName = b.branchNmKo || b.branchNmEn || b.branchID;
 
-    onProgress?.(`(${i + 1}/${targets.length}) ${branchName} 세션 전환 중...`);
+    // 받을 달이 하나도 없으면 지점 전환도 하지 않는다(전환 자체가 1콜이다)
+    if (wanted.length === 0) {
+      branchResults.push({ branchID: b.branchID, branchName, firstYM: null, monthly: [], monthCount: 0 });
+      continue;
+    }
+
+    onProgress?.(`(${i + 1}/${plans.length}) ${branchName} 세션 전환 중...`);
     let branchToken;
     try {
       branchToken = await barisChangeBranch(b.branchID, token);
     } catch (e) {
       onProgress?.(`${branchName} 건너뜀: ${e.message}`);
-      done += months.length;
+      done += wanted.length;
       continue;
     }
 
-    onProgress?.(`(${i + 1}/${targets.length}) ${branchName} 매출 조회 중...`);
-    const monthResults = await runWithConcurrency(months, 6, async (ym) => {
+    onProgress?.(`(${i + 1}/${plans.length}) ${branchName} 매출 조회 중...`);
+    const monthResults = await runWithConcurrency(wanted, BARIS_CONCURRENCY.monthSales, async (ym) => {
       try {
         const { revenue, customers, avgTicket } = await barisFetchMonthSales(b.branchID, ym, branchToken);
         return { ym, revenue, customers, avgTicket };
@@ -1891,7 +2015,26 @@ async function importFromBaris({ account, password, token: presetToken, startYM,
     });
   }
 
-  return { branches: branchResults };
+  return { branches: branchResults, fetched: total, skipped };
+}
+
+/* 이 지점에서 실제로 받아야 할 달만 고른다.
+ *  - 이번 달·직전 달: 계속 바뀌므로 항상 받는다
+ *  - 확정된 달: state.monthly 에 이미 매출이 있으면 건너뛴다
+ *  - 첫 매출보다 앞선 달: 지난 조회에서 0으로 확인된 오픈 전 구간이라 건너뛴다
+ * 아직 받아 둔 게 없는 지점은 건너뛸 근거가 없으므로 전부 받는다.
+ * ※ BARIS_DEFAULT_START_YM 을 더 이른 달로 바꾸면 새로 생긴 앞쪽 달이 "오픈 전"으로 보여
+ *   건너뛸 수 있다. 그때는 데이터 초기화 후 다시 받는다. */
+function monthsToFetch(branchID, months) {
+  const saved = state.monthly.filter((m) => m.storeId === branchID && m.revenue > 0);
+  if (saved.length === 0) return months;
+  const savedYMs = new Set(saved.map((m) => m.yearMonth));
+  const firstSaved = saved.reduce((a, m) => (m.yearMonth < a ? m.yearMonth : a), saved[0].yearMonth);
+  return months.filter((ym) => {
+    if (!isSettledYM(ym)) return true;   // 이번 달·직전 달
+    if (savedYMs.has(ym)) return false;  // 이미 받아 둔 확정 월
+    return ym >= firstSaved;             // 오픈 전 구간은 다시 볼 필요가 없다
+  });
 }
 
 /** 단일 지점 결과를 기존 상태에 안전하게 병합 */
@@ -2037,9 +2180,11 @@ async function runBarisImport(importArgs, disableBtns) {
     await cloudSave({ silent: true });
 
     const totalMonthly = result.branches.reduce((s, b) => s + b.monthCount, 0);
+    // 확정된 달은 저장된 값을 그대로 쓴다 — 조회를 건너뛴 것이지 값이 빠진 게 아니다
+    const skippedNote = result.skipped > 0 ? ` (확정된 ${result.skipped}개월은 저장값 사용)` : "";
     const names = result.branches.map((b) => b.branchName).join(", ");
     setBarisStatus(
-      `✓ ${result.branches.length}개 지점 / 매출 ${totalMonthly}건 업데이트 완료.\n${names}`,
+      `✓ ${result.branches.length}개 지점 / 매출 ${totalMonthly}건 업데이트 완료.${skippedNote}\n${names}`,
       "ok"
     );
     showToast(`${result.branches.length}개 지점을 업데이트했습니다.`);
@@ -2192,9 +2337,8 @@ function bindEvents() {
       const narrow = window.matchMedia("(max-width: 760px)").matches;
       if (narrow !== lastNarrow) {
         lastNarrow = narrow;
-        renderChart(ui.filterStart, ui.filterEnd);
-        renderProfitChart(ui.filterStart, ui.filterEnd);
-        renderTrendChart(ui.filterStart, ui.filterEnd);
+        if (SECTIONS.revenueShareChart) renderChart(ui.filterStart, ui.filterEnd);
+        if (SECTIONS.trendChart) renderTrendChart(ui.filterStart, ui.filterEnd);
       }
     }, 150);
   });
@@ -2203,7 +2347,7 @@ function bindEvents() {
 
 
   // 정렬 (헤더가 매 렌더마다 재생성되므로 위임 방식으로 바인딩)
-  document.getElementById("store-thead").addEventListener("click", (e) => {
+  document.getElementById("store-thead")?.addEventListener("click", (e) => {
     const th = e.target.closest("th[data-sort]");
     if (!th) return;
     const k = th.dataset.sort;

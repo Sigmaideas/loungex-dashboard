@@ -94,7 +94,12 @@
       </div>
     </section>
 
-    <!-- 매장별 매출 비중 차트 -->
+    <!-- ────────────────────────────────────────────────────────
+         서버 부하로 잠시 내린 섹션 (매장별 매출 비중 / 월별 매출 추이 / 지점 상세).
+         다시 켤 때: 아래 주석을 풀고, script.js 의 SECTIONS 플래그를 true 로 바꾼다.
+         (thead 안의 헤더는 script.js 에서 본문과 함께 생성 — 캐시 불일치 방지)
+    ────────────────────────────────────────────────────────
+
     <section class="card chart-card">
       <div class="card-head">
         <h2>매장별 매출 비중</h2>
@@ -105,7 +110,6 @@
       </div>
     </section>
 
-    <!-- 월별 지점별 매출 추이 -->
     <section class="card chart-card">
       <div class="card-head">
         <h2>월별 매출 추이 (지점별)</h2>
@@ -116,19 +120,20 @@
       </div>
     </section>
 
-    <!-- 지점 상세 테이블 -->
     <section class="card">
       <div class="card-head">
         <h2>지점 상세</h2>
       </div>
       <div class="table-wrap">
         <table class="data-table" id="store-table">
-          <thead id="store-thead"><!-- script.js에서 본문과 함께 생성(캐시 불일치 방지) --></thead>
+          <thead id="store-thead"></thead>
           <tbody id="store-tbody"></tbody>
           <tfoot id="store-tfoot"></tfoot>
         </table>
       </div>
     </section>
+
+    ──────────────────────────────────────────────────────── -->
 
   </main>
 
