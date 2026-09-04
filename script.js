@@ -97,12 +97,6 @@ const formatCurrencyShort = (n) => {
 
 const formatPercent = (rate) => `${(rate * 100).toFixed(1)}%`;
 
-// 소요 시간 표기: 초 → "1:36" (바리스 결제관리 OTC 표기와 같은 형식)
-const formatDuration = (sec) => {
-  const v = Math.round(Number(sec) || 0);
-  return `${Math.floor(v / 60)}:${pad(v % 60)}`;
-};
-
 /**
  * 수익률 표시: 100% 미만이면 100에서 부족한 만큼 "-N%"로 빨간 표시.
  * 데이터 없음(투자금=0 등)이면 "-".
@@ -552,17 +546,6 @@ async function refreshBranchStatus() {
     // 지점별 오늘 실적/상품 수 — 바리스 운영관리 페이지와 같은 소스
     const detailErrors = [];
 
-    // OTC는 전 지점을 한 콜로 받는다(지점 전환 불필요). 아래 조회와 나란히 돌리고,
-    // 실패해도 나머지 지표는 그대로 간다.
-    const otcTask = barisFetchOtcAll(token)
-      .then((otc) => {
-        for (const b of mine) {
-          const sec = otc.byId.get(b.branchId) ?? otc.byName.get(b.branchName);
-          if (Number.isFinite(sec)) b.otcAvg = sec;
-        }
-      })
-      .catch((e) => detailErrors.push(`OTC 평균 (${e.message})`));
-
     // 오늘 지표도 전 지점 한 콜로 받는다(지점 전환 불필요).
     // 실패했거나 응답에서 빠진 지점만 아래에서 지점별로 다시 받는다.
     const needToday = new Set(mine.map((b) => b.branchId).filter(Boolean));
@@ -577,19 +560,19 @@ async function refreshBranchStatus() {
     } catch (e) {
       detailErrors.push(`전 지점 오늘 지표 (${e.message})`);
     }
-    // 카드에 보이는 값은 여기까지가 전부다(아래 지점별 조회는 그래프·결제비율용).
-    // 나머지 80콜을 기다리지 않고 숫자부터 채워 넣는다.
+    // 카드에 보이는 값은 여기까지가 전부다(아래 지점별 조회는 배경 그래프용).
+    // 남은 지점별 조회를 기다리지 않고 숫자부터 채워 넣는다.
     renderBranchStatus();
     for (const b of mine) {
       if (!b.branchId) detailErrors.push(`${b.branchName}: branchId 없음`);
     }
 
-    // 스파크라인·결제수단은 지점별 조회라 전 지점을 돈다.
+    // 스파크라인은 지점별 조회라 전 지점을 돈다.
     const perBranch = mine.filter((b) => b.branchId);
 
     await runWithConcurrency(perBranch, 4, async (b) => {
       // 캘린더 API는 세션의 "현재 지점"에 묶여 있어 지점 전환 토큰이 필요하다.
-      // 지점당 한 번만 전환해 아래 조회에 함께 쓴다(전환 실패 시 기본 토큰으로 시도).
+      // (전환 실패 시 기본 토큰으로 시도)
       let branchToken = token;
       try {
         branchToken = await barisChangeBranch(b.branchId, token);
@@ -608,28 +591,8 @@ async function refreshBranchStatus() {
       } catch (e) {
         detailErrors.push(`${b.branchName}: 일별 실적 (${e.message})`);
       }
-      try {
-        Object.assign(b, await barisFetchPayTypes(b.branchId, branchToken));
-      } catch (e) {
-        detailErrors.push(`${b.branchName}: 결제수단 (${e.message})`);
-      }
     });
-    await otcTask;
     if (detailErrors.length) console.warn("[지점 상세 조회 실패]", detailErrors);
-
-    // 새로운 결제수단이 생기면 알아볼 수 있게 종류를 남긴다
-    const payTypeNames = [...new Set(mine.flatMap((b) => (b.payTypes || []).map((p) => p.name)))];
-    if (payTypeNames.length) console.info("[결제수단 종류]", payTypeNames.join(", "));
-    // 바리스 매출분석 화면과 숫자를 직접 대조할 수 있게 원본을 남긴다
-    const payRows = mine.flatMap((b) =>
-      (b.payTypes || []).map((p) => ({ 지점: b.branchName, 결제수단: p.name, 건수: p.count, 금액: p.amount }))
-    );
-    if (payRows.length && console.table) console.table(payRows);
-    // OTC는 바리스 홈의 지점별 순위 화면과 대조할 수 있게 남긴다
-    const otcRows = mine
-      .filter((b) => Number.isFinite(b.otcAvg))
-      .map((b) => ({ 지점: b.branchName, "OTC 평균": formatDuration(b.otcAvg) }));
-    if (otcRows.length && console.table) console.table(otcRows);
 
     const ok = mine.filter((b) => Number.isFinite(b.orderable)).length;
     const graphed = mine.filter((b) => (b.series || []).length > 0).length;
@@ -651,8 +614,6 @@ async function refreshBranchStatus() {
     clearCalendarCache(); // 임포트와 나눠 쓰는 구간은 여기까지
   }
   renderBranchStatus();
-  // 지점 상세의 "현장 : 앱" 열은 방금 받은 결제수단을 쓰므로 함께 다시 그린다
-  if (state.stores.length > 0) renderStoreTable(ui.filterStart, ui.filterEnd);
 }
 
 /* ── 오늘 날씨 ──────────────────────────────────────────────
@@ -861,7 +822,7 @@ function cardFootItems(b) {
   if (Number.isFinite(b.todayProduced)) {
     items.push(`<span>제조 <b>${formatNumber(b.todayProduced)}</b>잔</span>`);
   }
-  // OTC는 카드에서 빼고 지점 상세 표에서만 본다(카드는 "오늘" 지표만 남긴다).
+  // 카드에는 "오늘" 지표만 둔다.
   return items; // 값이 하나도 없으면 상태 칩("데이터 없음")만 남기고 비워 둔다
 }
 
@@ -1432,11 +1393,6 @@ function getSortedStoreRows(startYM, endYM) {
       // 일평균은 월평균을 30으로 나눈 값이라 정렬 순서는 같지만, 컬럼별 정렬 상태 표시를 위해 따로 둔다
       case "avgDailyRevenue": av = a.avgMonthlyRevenue; bv = b.avgMonthlyRevenue; break;
       case "avgTicket": av = a.avgTicket; bv = b.avgTicket; break;
-      case "appRatio": av = payChannelSplit(branchPayTypes(a.store))?.appPct ?? -1;
-                       bv = payChannelSplit(branchPayTypes(b.store))?.appPct ?? -1; break;
-      // OTC 없는 지점은 정렬 방향과 무관하게 뒤로 밀리도록 큰 값을 준다(짧을수록 좋은 지표)
-      case "otcAvg": av = branchOtcAvg(a.store) ?? Infinity;
-                     bv = branchOtcAvg(b.store) ?? Infinity; break;
       case "monthlyRent": av = a.monthlyRent; bv = b.monthlyRent; break;
       case "monthlyLabor": av = a.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; bv = b.store.monthlyLabor ?? DEFAULT_MONTHLY_LABOR; break;
       case "materialCost": av = a.materialCost; bv = b.materialCost; break;
@@ -1462,40 +1418,7 @@ const STORE_COLUMNS = [
   { label: "월평균 매출", sort: "avgRevenue", center: true },
   { label: "일평균 매출", sort: "avgDailyRevenue", center: true, title: "누적 매출 ÷ 운영일자 (VAT 별도)" },
   { label: "평균 객단가", sort: "avgTicket", center: true, title: "바리스 매출 캘린더의 평균 객단가 · 객수 가중평균" },
-  { label: "앱 결제비율", sort: "appRatio", center: true, title: "누적 결제 건수 중 앱 결제 비중 · 결제수단이 \"앱 …\"(앱 X-pay·앱 신용카드 등)이면 앱, 나머지는 현장" },
-  { label: "OTC 평균", sort: "otcAvg", center: true, title: "OTC(Order to Completion) = 주문 접수 → 제조 완료 · 바리스 지점별 순위 기준 · 이번 달 1일~오늘 평균" },
 ];
-
-/* 지점 상세(로컬 매출 데이터)와 바리스 실시간 상태를 잇는다.
-   두 데이터가 서로 다른 API에서 와 지점ID 체계가 다를 수 있어, 이름으로도 맞춰 본다.
-   공백·괄호·접두어 차이로 어긋나는 경우가 많아 이름은 정규화해 비교한다. */
-const normalizeBranchName = (name) =>
-  String(name || "").replace(/[\s()\-–—_·]/g, "").toLowerCase();
-
-function branchStatusOf(store) {
-  const list = branchStatusSummary?.branches || [];
-  const key = normalizeBranchName(store.name);
-  return (
-    list.find((b) => b.branchId && b.branchId === store.id) ||
-    list.find((b) => normalizeBranchName(b.branchName) === key)
-  );
-}
-
-const branchPayTypes = (store) => branchStatusOf(store)?.payTypes;
-
-// OTC 평균(초). 아직 못 받았거나 집계할 주문이 없으면 undefined → 표에 "-"
-const branchOtcAvg = (store) => branchStatusOf(store)?.otcAvg;
-
-// 앱 결제 비중 — 나머지는 현장(키오스크) 결제
-function channelCell(split) {
-  if (!split) return "-";
-  return `<span class="channel-app">${Math.round(split.appPct)}%</span>`;
-}
-
-// OTC 평균 — 바리스와 같은 "분:초" 표기
-function otcCell(sec) {
-  return Number.isFinite(sec) ? formatDuration(sec) : "-";
-}
 
 function renderStoreHead() {
   const thead = document.getElementById("store-thead");
@@ -1529,8 +1452,6 @@ function renderStoreTable(startYM, endYM) {
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9)}</td>
       <td class="num center cell-readonly">${formatCurrency(m.avgMonthlyRevenue * 0.9 / 30)}</td>
       <td class="num center cell-readonly">${m.avgTicket > 0 ? formatCurrency(m.avgTicket) : "-"}</td>
-      <td class="num center cell-readonly">${channelCell(payChannelSplit(branchPayTypes(store)))}</td>
-      <td class="num center cell-readonly">${otcCell(branchOtcAvg(store))}</td>
     </tr>
   `).join("");
 
@@ -1542,8 +1463,6 @@ function renderStoreTable(startYM, endYM) {
   };
   const meanRevenue = meanOf((r) => r.avgMonthlyRevenue);
   const meanTicket = meanOf((r) => r.avgTicket);
-  // 전체매장 평균 OTC = 지점별 평균의 평균(다른 열과 같은 "매장 평균" 기준)
-  const meanOtc = meanOf((r) => branchOtcAvg(r.store) ?? 0);
 
   tfoot.innerHTML = `
     <tr>
@@ -1551,10 +1470,6 @@ function renderStoreTable(startYM, endYM) {
       <td class="num center">${formatCurrency(meanRevenue * 0.9)}</td>
       <td class="num center">${formatCurrency(meanRevenue * 0.9 / 30)}</td>
       <td class="num center">${meanTicket > 0 ? formatCurrency(meanTicket) : "-"}</td>
-      <td class="num center">${channelCell(payChannelSplit(
-        rows.flatMap((r) => branchPayTypes(r.store) || [])
-      ))}</td>
-      <td class="num center">${otcCell(meanOtc > 0 ? meanOtc : undefined)}</td>
     </tr>
   `;
 
@@ -1864,90 +1779,9 @@ function monthOverMonthChange(lastDays, curDays, now) {
   return ((projected - lastTotal) / lastTotal) * 100;
 }
 
-/**
- * 지점 한 곳의 누적 결제수단 구성 (바리스 매출분석 화면과 같은 소스).
- * GET /analysis/sales/graph/{branchID}?tab_cd=ALL
- *   payload.sales_pay_type[{ pay_type: "카드결제"…, count, tot_sell_amt }]
- *
- * 바리스는 주문 경로(앱/현장)를 따로 주지 않아 결제수단으로 갈음한다.
- * 어떤 수단이 앱 결제인지는 실제 응답 문자열을 보고 확정해야 하므로,
- * 여기서는 받은 그대로 보여주고 문자열을 콘솔에 남긴다.
- */
-async function barisFetchPayTypes(branchID, token) {
-  const j = await barisGet(`/analysis/sales/graph/${branchID}?tab_cd=ALL`, token);
-  const list = Array.isArray(j?.payload?.sales_pay_type) ? j.payload.sales_pay_type : [];
-  const payTypes = list
-    .map((r) => ({
-      name: String(r.pay_type || "").trim(),
-      count: toFiniteNumber(r.count) ?? 0,
-      amount: toFiniteNumber(r.tot_sell_amt) ?? 0,
-    }))
-    .filter((r) => r.name && r.count > 0)
-    .sort((a, b) => b.count - a.count);
-  return { payTypes };
-}
-
-/**
- * 전 지점 OTC 평균 (바리스 홈의 "지점별 누적 매출 순위"와 같은 소스).
- * GET /home/sales/rank?take=100&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
- *   payload.list[{ branch_id, avg_otc: "1:36", ... }]  ※ 서버가 이미 지점별로 집계해 준다
- *
- * OTC(Order to Completion) = 주문 접수 → 제조 완료.
- * 예전에는 지점마다 결제내역 3페이지(300건)를 긁어 중앙값을 냈다. 중앙값이 더 정확하지만
- * (밀린 몇 건이 평균을 1.5배로 부풀린다) 지점당 3콜이 업데이트에서 가장 느린 구간이라,
- * 서버가 한 콜로 주는 평균으로 바꿨다. 지점 수와 무관하게 1콜이고 지점 전환도 필요 없다.
- *
- * 기간은 이번 달 1일~오늘 — 예전 결제내역 조회의 tab_cd=MONTH 와 같은 범위다.
- */
-async function barisFetchOtcAll(token) {
-  const now = new Date();
-  const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const start = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
-  const j = await barisGet(
-    `/home/sales/rank?page=1&take=100&start_date=${start}&end_date=${ymd(now)}`,
-    token
-  );
-  const list = Array.isArray(j?.payload?.list) ? j.payload.list : [];
-  // 지점 운영 현황과 지점ID로 맞추되, 응답에 오타 키(brnach_id)가 섞이는 API라 이름으로도 받아 둔다
-  const byId = new Map();
-  const byName = new Map();
-  for (const r of list) {
-    const sec = parseDurationToSeconds(r.avg_otc);
-    if (sec === null) continue;
-    const id = r.branch_id || r.brnach_id || "";
-    if (id) byId.set(id, sec);
-    if (r.branch_name) byName.set(String(r.branch_name).trim(), sec);
-  }
-  return { byId, byName }; // 각각 초 단위
-}
-
-// "1:02" / "10:18" → 초. 형식이 다르거나 비어 있으면 null(집계에서 제외).
-function parseDurationToSeconds(text) {
-  const m = /^(\d+):([0-5]\d)$/.exec(String(text || "").trim());
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-
-/* 결제수단 문자열 → 앱 / 현장(키오스크).
-   바리스는 앱 결제를 "앱 X-pay", "앱 기타결제", "앱 신용카드" 처럼 "앱" 을 붙여 구분한다.
-   그래서 이름에 "앱" 이 있으면 앱, 나머지("신용카드" 등)는 현장으로 본다.
-   ※ 카드/현금 같은 수단명을 먼저 보면 "앱 신용카드" 가 현장으로 새므로 앱을 먼저 판정한다. */
-const APP_PAY = /앱/;
-// 매출로 볼 수 없는 건들(재제조·무료·시연·테스트)은 비율에서 뺀다
-const EXCLUDED_PAY = /재제조|무료|시연|테스트|면접|디버그/;
-
-function payChannelSplit(payTypes) {
-  if (!Array.isArray(payTypes) || payTypes.length === 0) return null;
-  let onsite = 0, app = 0;
-  for (const p of payTypes) {
-    if (EXCLUDED_PAY.test(p.name)) continue;
-    if (APP_PAY.test(p.name)) app += p.count;
-    else onsite += p.count;
-  }
-  const total = onsite + app;
-  if (total === 0) return null;
-  return { onsite, app, onsitePct: (onsite / total) * 100, appPct: (app / total) * 100 };
-}
+/* 앱 결제비율(GET /analysis/sales/graph/{지점}?tab_cd=ALL — 지점당 1콜)과
+   OTC 평균(GET /home/sales/rank — 1콜)은 부하가 커서 걷어냈다.
+   전용 API가 준비되면 되살린다 — 조회·표시 코드는 커밋 63596c7 에 남아 있다. */
 
 async function barisFetchOwnBranches(token) {
   const j = await barisGet("/xmanager/branches/own", token);
