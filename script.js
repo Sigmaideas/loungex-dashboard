@@ -36,6 +36,9 @@ const SECTIONS = {
   // 지점 카드의 배경 그래프 + "지난달 대비". 이것만 지점 수 × 최대 6개월치 캘린더를
   // 지점별로 부른다 — 첫 로드 콜의 대부분이 여기서 나온다. 카드의 오늘 지표는 그대로 나온다.
   branchSparkline: false,
+  // "업데이트" 버튼. 유일한 바리스 재조회 경로다(지점당 세션 전환 1콜 + 받을 달 수만큼 캘린더).
+  // 내려 두면 매출은 클라우드에 저장된 마지막 값에서 멈춘다 — 새 달 매출이 안 들어온다.
+  updateButton: false,
 };
 
 /* 바리스 서버에 동시에 던지는 요청 수. 서버가 부하로 멈춘 뒤 낮춰 잡았다.
@@ -2385,7 +2388,7 @@ function bindEvents() {
   });
 
   // 업데이트(바리스 매출 갱신). 이미 로그인돼 있으면 비번 재입력 없이 토큰으로 바로 실행.
-  document.getElementById("btn-baris").addEventListener("click", () => {
+  document.getElementById("btn-baris")?.addEventListener("click", () => {
     const token = getBarisToken();
     if (!token) { openBarisModal("import"); return; }
     openBarisProgress("바리스 매출 업데이트 중...");
